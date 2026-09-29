@@ -438,8 +438,248 @@ WORDLIST_SENSITIVE_FILES = [
 ]
 
 
+# ── Extended wordlists ────────────────────────────────────────────────────────
+
+# Fintech / marketplace paths like Robinhood bonfire example
+WORDLIST_FINTECH = [
+    "waitlist", "waitlist/", "waitlist/join", "waitlist/status",
+    "waitlist/position", "waitlist/spot", "waitlist/email",
+    "waitlist/check", "waitlist/signup", "waitlist/confirm",
+    "waitlist/invite", "waitlist/referral",
+    "waitlist/credit_card", "waitlist/credit_card/email",
+    "waitlist/credit_card/email/spot", "waitlist/credit_card/status",
+    "waitlist/debit_card", "waitlist/crypto", "waitlist/ipo",
+    "queue", "queue/position", "queue/status", "queue/check",
+    "spot", "spot/check", "spot/status",
+    "invite", "invite/", "invite/check", "invite/status",
+    "invite/code", "invite/referral",
+    "beta", "beta/", "beta/signup", "beta/waitlist", "beta/join",
+    "early-access", "early_access", "earlyaccess",
+    "pre-launch", "prelaunch",
+    "feature/", "features/", "feature-flag", "feature-flags",
+    "flags/", "flag/",
+    # Account / subscription tier checks
+    "subscription/tier", "subscription/plan", "subscription/status",
+    "account/tier", "account/level", "account/status",
+    "account/premium", "account/gold", "account/platinum",
+    "user/tier", "user/subscription", "user/premium",
+    "membership", "membership/status", "membership/tier",
+    "plan", "plan/status", "plans/check",
+    # Card endpoints
+    "card", "cards", "card/status", "card/check",
+    "cards/virtual", "cards/physical",
+    "credit", "credit/check", "credit/status",
+    "debit", "debit/check",
+    # Crypto / trading
+    "crypto/waitlist", "crypto/status",
+    "trading/status", "trading/tier",
+    "ipo", "ipo/waitlist", "ipo/check",
+    "options/waitlist", "options/status",
+    # KYC / verification
+    "kyc/status", "kyc/check", "kyc/",
+    "verification/status", "verification/check",
+    "identity/status", "identity/verify",
+    # Internal / ops
+    "ops/", "operations/", "internal/status",
+    "admin/feature-flags", "admin/flags",
+    "admin/experiments", "experiments/",
+    "ab-test", "ab_test", "split-test",
+    "cohort", "segment", "segments/",
+]
+
+WORDLIST_MOBILE_API = [
+    # Mobile-specific API paths often undocumented
+    "api/mobile/", "api/app/", "api/ios/", "api/android/",
+    "mobile/api/", "app/api/",
+    "api/v1/mobile/", "api/v2/mobile/",
+    "api/v1/app/config", "api/v1/app/settings",
+    "api/v1/app/version", "api/v1/app/update",
+    "api/v1/push/register", "api/v1/push/unregister",
+    "api/v1/device/register", "api/v1/device/",
+    "api/v1/notifications/register",
+    "app-config.json", "app/config.json",
+    "mobile/config", "ios/config", "android/config",
+    # Deep linking / app clips
+    "apple-app-site-association",
+    ".well-known/apple-app-site-association",
+    ".well-known/assetlinks.json",
+    "assetlinks.json",
+]
+
+WORDLIST_HIDDEN_ADMIN = [
+    # Hidden / renamed admin panels
+    "manage", "management", "mgmt", "mgr",
+    "manager", "managing",
+    "supervisor", "superuser", "su", "root",
+    "sysadmin", "sys-admin", "system",
+    "cms", "cms/", "cms/login",
+    "portal", "portal/", "portal/login",
+    "intranet", "intranet/",
+    "extranet", "extranet/",
+    "oms", "crm", "erp", "hrm",
+    "support/admin", "support/dashboard",
+    "ops/admin", "devops/",
+    "infra/", "infrastructure/",
+    "monitoring/", "grafana/", "kibana/",
+    "jenkins/", "gitlab/", "bitbucket/",
+    "jira/", "confluence/", "notion/",
+    "sentry/", "datadog/",
+    "phpmyadmin", "phpmyadmin/", "pma/",
+    "adminer", "adminer.php",
+    "webmin/", "cpanel/", "plesk/",
+    "django-admin", "flask-admin",
+    # Token-gated internal tools
+    "_internal", "_private", "_staff",
+    "_ops", "_system", "_admin",
+    "~admin", "~staff",
+]
+
+WORDLIST_INTERNAL_SUBPATH = [
+    # Paths that reveal internal structure
+    "internal/", "internal/api/",
+    "private/", "private/api/",
+    "corp/", "corporate/",
+    "employee/", "employees/",
+    "vendor/", "vendors/", "partner/", "partners/",
+    "merchant/", "merchants/",
+    "agent/", "agents/",
+    "b2b/", "b2c/", "b2b/api/",
+    "enterprise/", "enterprise/api/",
+    "v0/", "v0/api/",
+    "legacy/", "legacy/api/",
+    "old/", "deprecated/",
+    "test/", "staging/", "dev/",
+    "sandbox/", "uat/", "qa/",
+    "preview/", "canary/", "shadow/",
+    "dark/", "green/", "blue/",
+    # Microservice patterns
+    "service/", "services/",
+    "micro/", "svc/",
+    "gateway/", "edge/",
+    # gRPC / Twirp
+    "twirp/", "rpc/",
+]
+
+WORDLIST_EMAIL_ORACLE_PATHS = [
+    # Endpoints that accept email and may diff on existence
+    "api/v1/users/check", "api/v2/users/check",
+    "api/v1/email/check", "api/v1/email/exists",
+    "api/v1/email/available", "api/v1/email/validate",
+    "api/v1/account/check", "api/v1/account/exists",
+    "api/v1/auth/check", "api/v1/auth/exists",
+    "users/check", "users/exists", "users/available",
+    "email/check", "email/exists", "email/available",
+    "account/check", "account/exists",
+    "auth/check-email", "auth/email-exists",
+    "check-email", "check_email", "checkEmail",
+    "verify-email", "verify_email",
+    "user/exists", "user/check",
+    # Signup availability checks
+    "api/v1/username/check", "api/v1/username/available",
+    "username/check", "username/available",
+    "api/v1/register/check", "api/v1/signup/check",
+    # Waitlist-style email checks (like Robinhood)
+    "waitlist/email/check", "waitlist/check/email",
+    "waitlist/status/email", "waitlist/position/email",
+    "waitlist/credit_card/email/spot",
+    "waitlist/debit_card/email/spot",
+    "waitlist/crypto/email/spot",
+    "waitlist/ipo/email/spot",
+    "waitlist/options/email/spot",
+    "queue/check/email", "queue/position/email",
+    "invite/check/email", "invite/status/email",
+    "spot/check/email",
+    # Password-reset double as enumerators
+    "api/v1/password/reset/check",
+    "api/v1/forgot-password/check",
+    "api/v1/auth/forgot/check",
+]
+
+SUBDOMAIN_COMMON = [
+    "api", "api2", "api-v2", "apiv2", "api3",
+    "app", "app2", "apps", "application",
+    "admin", "administrator", "manage", "management", "portal",
+    "dashboard", "console", "panel",
+    "staging", "stage", "stg", "uat", "qa", "test", "testing",
+    "dev", "develop", "development", "preview",
+    "beta", "alpha", "canary", "sandbox", "demo",
+    "internal", "intranet", "corp", "corporate",
+    "legacy", "old", "v1", "v2",
+    "mobile", "m", "ios", "android",
+    "web", "www2", "new",
+    "static", "assets", "cdn", "media", "images",
+    "mail", "email", "smtp", "mx",
+    "vpn", "remote", "ssh",
+    "login", "auth", "sso", "id", "identity",
+    "account", "accounts", "profile",
+    "shop", "store", "checkout",
+    "support", "help", "docs", "documentation",
+    "blog", "news", "press",
+    "status", "health", "monitor", "monitoring",
+    "metrics", "grafana", "kibana", "datadog",
+    "jenkins", "ci", "cd", "build", "deploy",
+    "git", "gitlab", "bitbucket", "code",
+    "jira", "confluence", "wiki", "kb",
+    "slack", "chat",
+    "db", "database", "mysql", "postgres", "redis", "mongo",
+    "s3", "storage", "files", "upload",
+    "payments", "billing", "finance",
+    "partner", "partners", "merchant", "vendor",
+    "b2b", "enterprise", "business",
+    "investor", "ir", "data",
+    "jobs", "careers", "hiring",
+    "bonfire", "phoenix", "horizon", "ember",  # internal tool names
+    "backstage", "launchpad", "mission-control",
+    "tower", "command", "ops", "devops", "infra",
+    "gateway", "edge", "proxy", "waf",
+    "graphql", "gql",
+    "socket", "ws", "websocket",
+    "rpc", "grpc",
+    "event", "events", "stream", "streams",
+    "worker", "workers", "jobs",
+    "cron", "scheduler",
+    "notification", "notifications", "push",
+    "analytics", "tracking", "telemetry",
+    "feature", "experiment", "ab",
+    "search", "elastic", "solr",
+    "cache", "memcache",
+    "queue", "mq", "rabbit", "kafka",
+    "service", "services", "microservice",
+]
+
+# Secret patterns to scan in JS / responses
+SECRET_PATTERNS = [
+    (re.compile(r"""(?:api[_-]?key|apikey)\s*[:=]\s*['"`]([A-Za-z0-9_\-]{20,60})['"`]""", re.I), "API Key"),
+    (re.compile(r"""(?:secret|private[_-]?key)\s*[:=]\s*['"`]([A-Za-z0-9+/=_\-]{16,80})['"`]""", re.I), "Secret"),
+    (re.compile(r"""(?:password|passwd|pwd)\s*[:=]\s*['"`]([^'"`\s]{8,50})['"`]""", re.I), "Password"),
+    (re.compile(r"""(?:token|access[_-]?token|auth[_-]?token)\s*[:=]\s*['"`]([A-Za-z0-9._\-]{20,200})['"`]""", re.I), "Token"),
+    (re.compile(r"""AKIA[0-9A-Z]{16}"""), "AWS Access Key"),
+    (re.compile(r"""(?:aws[_-]?secret|AWS_SECRET)\s*[:=]\s*['"`]([A-Za-z0-9+/]{40})['"`]""", re.I), "AWS Secret"),
+    (re.compile(r"""AIza[0-9A-Za-z\-_]{35}"""), "Google API Key"),
+    (re.compile(r"""(?:gh[pousr]|github[_-]?token)\s*[:=]?\s*['"`]?(ghp_[A-Za-z0-9]{36}|gho_[A-Za-z0-9]{36}|ghs_[A-Za-z0-9]{36}|[0-9a-f]{40})['"`]?""", re.I), "GitHub Token"),
+    (re.compile(r"""sk-[A-Za-z0-9]{32,60}"""), "OpenAI/Stripe Secret Key"),
+    (re.compile(r"""(?:stripe[_-]?(?:secret|live|test)[_-]?key)\s*[:=]\s*['"`](sk_(?:live|test)_[A-Za-z0-9]{24,})['"`]""", re.I), "Stripe Key"),
+    (re.compile(r"""(?:twilio[_-]?(?:auth|account|secret))\s*[:=]\s*['"`]([A-Za-z0-9]{32,40})['"`]""", re.I), "Twilio Key"),
+    (re.compile(r"""(?:sendgrid[_-]?(?:api[_-]?key|key))\s*[:=]\s*['"`](SG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43})['"`]""", re.I), "SendGrid Key"),
+    (re.compile(r"""-----BEGIN (?:RSA |EC )?PRIVATE KEY-----"""), "Private Key"),
+    (re.compile(r"""(?:firebase[_-]?(?:api[_-]?key|secret|token))\s*[:=]\s*['"`]([A-Za-z0-9_\-]{20,80})['"`]""", re.I), "Firebase Key"),
+    (re.compile(r"""(?:jwt[_-]?secret|JWT_SECRET)\s*[:=]\s*['"`]([^'"`\s]{6,80})['"`]""", re.I), "JWT Secret"),
+    (re.compile(r"""(?:database[_-]?(?:url|uri|password)|DB_(?:URL|PASS|PASSWORD))\s*[:=]\s*['"`]([^'"`\s]{8,200})['"`]""", re.I), "Database Credential"),
+    (re.compile(r"""(?:slack[_-]?(?:token|webhook|bot))\s*[:=]\s*['"`](xox[bpoa]-[A-Za-z0-9\-]{10,200})['"`]""", re.I), "Slack Token"),
+    (re.compile(r"""xox[bpoa]-[0-9]{10,12}-[0-9]{10,12}-[A-Za-z0-9]{24}"""), "Slack Token"),
+    (re.compile(r"""(?:heroku[_-]?api[_-]?key)\s*[:=]\s*['"`]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})['"`]""", re.I), "Heroku API Key"),
+    (re.compile(r"""(?:mailgun[_-]?(?:api[_-]?key|key))\s*[:=]\s*['"`](key-[A-Za-z0-9]{32})['"`]""", re.I), "Mailgun Key"),
+    (re.compile(r"""(?:internal[_-]?(?:url|host|endpoint|ip))\s*[:=]\s*['"`]((?:10\.|172\.|192\.168\.|localhost)[^'"`\s]{0,100})['"`]""", re.I), "Internal URL"),
+]
+
+
 def build_wordlist(tech: Set[str]) -> List[str]:
-    paths = list(dict.fromkeys(WORDLIST_GENERAL + WORDLIST_SENSITIVE_FILES))
+    paths = list(dict.fromkeys(
+        WORDLIST_GENERAL + WORDLIST_SENSITIVE_FILES +
+        WORDLIST_FINTECH + WORDLIST_MOBILE_API +
+        WORDLIST_HIDDEN_ADMIN + WORDLIST_INTERNAL_SUBPATH +
+        WORDLIST_EMAIL_ORACLE_PATHS
+    ))
     if "spring" in tech:
         paths += WORDLIST_SPRING
     if "laravel" in tech:
@@ -1540,38 +1780,80 @@ async def run(args):
                 all_endpoints.extend(passive_eps)
                 print(f"  {G}Passive endpoints found:{RST} {len(passive_eps)}")
 
-        # ── Phase 2: Active crawl ─────────────────────────────────────────────
+        # ── Phase 2: Active crawl + JS scanning ──────────────────────────────
+        js_urls_all: List[str] = []
         if not args.passive_only:
-            print(f"\n{BOLD}{B}[Phase 2] Active Crawl (depth={args.depth}){RST}")
-            crawl_paths, sourcemap_urls = await crawl(http, base, depth=args.depth)
-            print(f"  Crawl found {len(crawl_paths)} paths, {len(sourcemap_urls)} source maps")
+            print(f"\n{BOLD}{B}[Phase 2] Active Crawl + JS Secret Scan (depth={args.depth}){RST}")
+            status0, html_body0, _ = await http.get(base)
+            js_urls_all = await discover_js_files(http, base, html_body0 if status0 else "")
 
+            crawl_paths, sourcemap_urls = await crawl(http, base, depth=args.depth)
+            print(f"  Crawl found {len(crawl_paths)} paths, {len(sourcemap_urls)} source maps, {len(js_urls_all)} JS files")
+
+            # Source map secrets
             for sm_url in sourcemap_urls[:10]:
                 sm_paths, sm_secrets = await fetch_sourcemap(http, sm_url)
                 crawl_paths.extend(sm_paths)
                 sourcemap_secrets.extend(sm_secrets)
                 if sm_secrets:
-                    print(f"  {R}Source map secrets:{RST} {sm_url}")
+                    print(f"  {R}Source map secrets found:{RST} {sm_url}")
+
+            # JS secret scanning
+            js_secrets = await scan_js_secrets(http, base, js_urls_all + sourcemap_urls)
+            if js_secrets:
+                print(f"  {R}JS secrets found: {len(js_secrets)}{RST}")
+                sourcemap_secrets.extend(js_secrets)
 
             crawl_eps = await probe_paths(http, base, crawl_paths)
             all_endpoints.extend(crawl_eps)
             print(f"  {G}Crawl endpoints found:{RST} {len(crawl_eps)}")
 
-        # ── Phase 3: Wordlist ─────────────────────────────────────────────────
+        # ── Phase 3: Wordlist + POST probe ────────────────────────────────────
         if not args.passive_only:
-            print(f"\n{BOLD}{B}[Phase 3] Wordlist Probing{RST}")
+            print(f"\n{BOLD}{B}[Phase 3] Wordlist Probing + POST Probe{RST}")
             wordlist = build_wordlist(tech)
-            print(f"  Probing {len(wordlist)} paths...")
+            print(f"  Probing {len(wordlist)} paths (GET)...")
             wl_eps = await probe_paths(http, base, wordlist)
             all_endpoints.extend(wl_eps)
-            print(f"  {G}Wordlist endpoints found:{RST} {len(wl_eps)}")
+            print(f"  {G}Wordlist GET endpoints:{RST} {len(wl_eps)}")
 
-        # ── Phase 4: Spec parsing ─────────────────────────────────────────────
-        print(f"\n{BOLD}{B}[Phase 4] Spec & Schema Parsing{RST}")
+            print(f"  POST probing {min(len(wordlist), 400)} paths...")
+            post_eps = await post_probe_paths(http, base, wordlist[:400])
+            # Only add POST results that weren't already found via GET
+            existing_urls = {ep.url for ep in all_endpoints}
+            new_post = [ep for ep in post_eps if ep.url not in existing_urls]
+            all_endpoints.extend(new_post)
+            print(f"  {G}POST-only endpoints:{RST} {len(new_post)}")
+
+        # ── Phase 4: Email / user oracle scan ────────────────────────────────
+        if not args.no_enum:
+            print(f"\n{BOLD}{B}[Phase 4] Email / User Oracle Scan{RST}")
+            oracle_eps = await email_oracle_scan(http, base, all_endpoints)
+            existing_urls = {ep.url for ep in all_endpoints}
+            new_oracle = [ep for ep in oracle_eps if ep.url not in existing_urls]
+            all_endpoints.extend(new_oracle)
+            print(f"  {R if new_oracle else G}Oracle findings:{RST} {len(new_oracle)} account-enum candidates")
+
+        # ── Phase 5: Spec parsing ─────────────────────────────────────────────
+        print(f"\n{BOLD}{B}[Phase 5] Spec & Schema Parsing{RST}")
         spec_eps = await parse_openapi(http, base)
         gql_eps = await parse_graphql(http, base)
         all_endpoints.extend(spec_eps)
         all_endpoints.extend(gql_eps)
+
+        # ── Phase 6: Live subdomain scan ──────────────────────────────────────
+        sub_endpoint_count = 0
+        if not args.no_passive and passive_subdomains and not args.passive_only:
+            print(f"\n{BOLD}{B}[Phase 6] Live Subdomain Discovery & Scan{RST}")
+            print(f"  Probing {len(passive_subdomains)} subdomains from crt.sh + {len(SUBDOMAIN_COMMON)} common names...")
+            live_subs = await probe_subdomains_live(http, passive_subdomains, host)
+            print(f"  {G}Live subdomains:{RST} {len(live_subs)}")
+            for sub, sub_base in live_subs[:20]:
+                sub_eps = await scan_subdomain(http, sub_base, tech, args)
+                for ep in sub_eps:
+                    all_endpoints.append(ep)
+                    sub_endpoint_count += 1
+            print(f"  {G}Subdomain endpoints found:{RST} {sub_endpoint_count}")
 
         # ── Deduplicate ───────────────────────────────────────────────────────
         seen_urls: Set[str] = set()
@@ -1583,15 +1865,15 @@ async def run(args):
         all_endpoints = unique_eps
         print(f"\n  {G}Total unique endpoints:{RST} {len(all_endpoints)}")
 
-        # ── Phase 5: Auth boundary ────────────────────────────────────────────
-        print(f"\n{BOLD}{B}[Phase 5] Auth Boundary Mapping{RST}")
+        # ── Phase 7: Auth boundary ────────────────────────────────────────────
+        print(f"\n{BOLD}{B}[Phase 7] Auth Boundary Mapping{RST}")
         await map_auth_boundary(http, all_endpoints)
         unauthed = sum(1 for ep in all_endpoints if ep.requires_auth is False)
         print(f"  {R}Accessible without auth:{RST} {unauthed}")
 
-        # ── Phase 6: Exploit triage ───────────────────────────────────────────
+        # ── Phase 8: Exploit triage ───────────────────────────────────────────
         if not args.no_triage:
-            print(f"\n{BOLD}{B}[Phase 6] Exploit Triage{RST}")
+            print(f"\n{BOLD}{B}[Phase 8] Exploit Triage{RST}")
 
             triage_tasks = []
             for ep in all_endpoints:
@@ -1600,9 +1882,9 @@ async def run(args):
 
             await asyncio.gather(*triage_tasks)
 
-        # ── Phase 7: Verb tampering ───────────────────────────────────────────
+        # ── Phase 9: Verb tampering ───────────────────────────────────────────
         if not args.no_verbs:
-            print(f"\n{BOLD}{B}[Phase 7] HTTP Verb Enumeration{RST}")
+            print(f"\n{BOLD}{B}[Phase 9] HTTP Verb Enumeration{RST}")
             high_val = [ep for ep in all_endpoints
                         if ep.tags & {"ADMIN", "IDOR", "AUTH_BYPASS", "BUSINESS_LOGIC"}][:30]
             await asyncio.gather(*[triage_verb_tamper(http, ep) for ep in high_val])
@@ -1619,6 +1901,280 @@ async def run(args):
             save_markdown(all_endpoints, tech, base, args.md)
 
         return all_endpoints
+
+
+# ── Subdomain live probing ────────────────────────────────────────────────────
+
+async def probe_subdomains_live(http: HTTP, subdomains: List[str], base_host: str) -> List[Tuple[str, str]]:
+    """Resolve subdomains to live HTTP targets. Returns [(subdomain, base_url)]."""
+    import socket
+    live: List[Tuple[str, str]] = []
+
+    async def check_sub(sub: str):
+        sub = sub.strip().lower()
+        if not sub or sub == base_host:
+            return
+        try:
+            socket.getaddrinfo(sub, 443, proto=socket.IPPROTO_TCP)
+        except Exception:
+            return
+        for scheme, port in [("https", 443), ("http", 80), ("https", 8443), ("http", 8080)]:
+            url = f"{scheme}://{sub}/"
+            status, body, headers = await http.get(url)
+            if status and status not in (0,):
+                live.append((sub, f"{scheme}://{sub}"))
+                return
+
+    # Also try common subdomain names on the target domain
+    tld = ".".join(base_host.split(".")[-2:])
+    generated = [f"{prefix}.{tld}" for prefix in SUBDOMAIN_COMMON]
+    all_subs = list(set(subdomains + generated))
+
+    batch = 50
+    for i in range(0, min(len(all_subs), 300), batch):
+        chunk = all_subs[i:i+batch]
+        await asyncio.gather(*[check_sub(s) for s in chunk], return_exceptions=True)
+
+    return live
+
+
+# ── JS secret scanning ────────────────────────────────────────────────────────
+
+async def scan_js_secrets(http: HTTP, base: str, js_urls: List[str]) -> List[str]:
+    """Fetch JS files and scan for hardcoded secrets."""
+    findings: List[str] = []
+    seen: Set[str] = set()
+
+    async def scan_one(url: str):
+        if url in seen:
+            return
+        seen.add(url)
+        status, body, _ = await http.get(url)
+        if status != 200 or not body:
+            return
+        for pattern, label in SECRET_PATTERNS:
+            for m in pattern.finditer(body):
+                val = m.group(0)
+                if len(val) > 6:
+                    findings.append(f"[{label}] in {url}: {val[:120]}")
+
+    await asyncio.gather(*[scan_one(u) for u in js_urls[:100]], return_exceptions=True)
+    return findings
+
+
+async def discover_js_files(http: HTTP, base: str, html_body: str) -> List[str]:
+    """Enumerate JS chunk files from webpack manifest / main bundle."""
+    js_urls: List[str] = []
+    base = base.rstrip("/")
+
+    # Common main bundle paths
+    candidates = [
+        "static/js/main.js", "static/js/bundle.js", "static/js/app.js",
+        "assets/js/app.js", "js/app.js", "js/main.js",
+        "dist/bundle.js", "dist/app.js", "build/static/js/main.js",
+        "runtime-main.js", "static/js/runtime-main.js",
+        "_next/static/chunks/main.js",
+        "webpack-manifest.json", "asset-manifest.json",
+        "static/asset-manifest.json", "build/asset-manifest.json",
+    ]
+
+    # Extract from HTML
+    for m in re.finditer(r'src=["\']([^"\']+\.js(?:\?[^"\']*)?)["\']', html_body):
+        path = m.group(1)
+        if not path.startswith("http"):
+            path = f"{base}/{path.lstrip('/')}"
+        js_urls.append(path)
+
+    # Check manifest for chunk list
+    for manifest_path in ["asset-manifest.json", "static/asset-manifest.json",
+                          "build/asset-manifest.json", "webpack-manifest.json"]:
+        status, body, _ = await http.get(f"{base}/{manifest_path}")
+        if status == 200 and body:
+            for m in re.finditer(r'"([^"]+\.js)"', body):
+                path = m.group(1)
+                if not path.startswith("http"):
+                    path = f"{base}/{path.lstrip('/')}"
+                js_urls.append(path)
+            break
+
+    for path in candidates:
+        js_urls.append(f"{base}/{path}")
+
+    return list(dict.fromkeys(js_urls))
+
+
+# ── POST probe all discovered paths ──────────────────────────────────────────
+
+async def post_probe_paths(http: HTTP, base: str, paths: List[str]) -> List[Endpoint]:
+    """Try POST on every discovered path — many endpoints only respond to POST."""
+    base = base.rstrip("/")
+    found: List[Endpoint] = []
+    post_payloads = [
+        {"email": "test@example.com"},
+        {"username": "test", "password": "test"},
+        {},
+    ]
+
+    async def check_post(path: str):
+        path = path.lstrip("/")
+        url = f"{base}/{path}"
+        for payload in post_payloads[:1]:
+            status, body, headers = await http.post(
+                url, json=payload,
+                headers={"Content-Type": "application/json"}
+            )
+            if status in (200, 201, 204, 400, 422):
+                ep = Endpoint(url=url, path=path, status=status,
+                              methods=["POST"], source="post_probe",
+                              content_type=headers.get("Content-Type", ""),
+                              body_sample=body[:300],
+                              response_headers=headers)
+                for pat, tags in TAG_RULES:
+                    if pat.search("/" + path):
+                        ep.tags.update(tags)
+                found.append(ep)
+                return
+
+    await asyncio.gather(*[check_post(p) for p in paths], return_exceptions=True)
+    return found
+
+
+# ── Email / user oracle ───────────────────────────────────────────────────────
+
+ORACLE_VERBOSE = re.compile(
+    r"(user\s+(not found|doesn.t exist|does not exist|invalid|unknown)|"
+    r"account\s+(not found|doesn.t exist|does not exist)|"
+    r"email\s+(not found|not registered|unknown|invalid|doesn.t exist)|"
+    r"no\s+account\s+found|invalid\s+email|that\s+email|"
+    r"we\s+couldn.t\s+find|we could not find|"
+    r"username\s+not\s+found|incorrect\s+username|wrong\s+username|"
+    r"not\s+enrolled|not\s+on\s+(?:the\s+)?waitlist|"
+    r"not\s+eligible|not\s+qualified|not\s+available|"
+    r"already\s+(?:on|in|enrolled|registered|signed\s+up)|"
+    r"you.re\s+(?:already|on\s+the)|"
+    r"position\s+\d+|you.re\s+#\d+|"
+    r"reserved\s+your\s+spot|your\s+spot\s+is)",
+    re.I
+)
+
+ORACLE_ENROLLED = re.compile(
+    r"(eligible|enrolled|on\s+the\s+(?:list|waitlist)|"
+    r"have\s+access|already\s+have|you\s+(?:have|got)|"
+    r"congratulations|activated|unlocked|"
+    r"gold|platinum|premium|pro\s+plan)",
+    re.I
+)
+
+
+async def email_oracle_scan(http: HTTP, base: str, endpoints: List[Endpoint]) -> List[Endpoint]:
+    """
+    For endpoints accepting email/username, probe with real-looking vs nonexistent
+    addresses and detect differential responses — the Robinhood waitlist pattern.
+    """
+    NONEXIST_EMAIL = "zzz_no_such_user_xqq_12345@fakefakedomain99.com"
+    NONEXIST_USER = "_zzz_no_such_user_xqq_12345_"
+    TEST_EMAILS = [
+        "admin@" + extract_host(base),
+        "test@" + extract_host(base),
+        "support@" + extract_host(base),
+        "info@" + extract_host(base),
+        "noreply@" + extract_host(base),
+        "admin@gmail.com",
+        "test@test.com",
+    ]
+
+    # Also probe dedicated oracle path list
+    oracle_candidates = list({ep.url for ep in endpoints
+                               if any(k in ep.path.lower() for k in
+                                      ["email", "user", "check", "exist", "waitlist",
+                                       "queue", "spot", "position", "invite", "status",
+                                       "register", "signup", "login", "auth"])})
+    # Add wordlist oracle paths
+    for path in WORDLIST_EMAIL_ORACLE_PATHS:
+        oracle_candidates.append(f"{base.rstrip('/')}/{path.lstrip('/')}")
+    oracle_candidates = list(dict.fromkeys(oracle_candidates))[:150]
+
+    new_eps: List[Endpoint] = []
+
+    async def probe_oracle(url: str):
+        path = urllib.parse.urlparse(url).path.lstrip("/")
+        # GET with email param
+        baseline_s, baseline_b, _ = await http.get(url, params={"email": NONEXIST_EMAIL})
+        if not baseline_s:
+            baseline_s, baseline_b, _ = await http.post(
+                url, json={"email": NONEXIST_EMAIL},
+                headers={"Content-Type": "application/json"})
+        if not baseline_s:
+            return
+
+        diffs_found = []
+        for test_email in TEST_EMAILS[:4]:
+            ts, tb, _ = await http.get(url, params={"email": test_email})
+            if not ts:
+                ts, tb, _ = await http.post(url, json={"email": test_email},
+                                              headers={"Content-Type": "application/json"})
+            if not ts:
+                continue
+
+            status_diff = ts != baseline_s
+            body_diff = abs(len(tb) - len(baseline_b)) > 30
+            enrolled_in_test = bool(ORACLE_ENROLLED.search(tb))
+            enrolled_in_base = bool(ORACLE_ENROLLED.search(baseline_b))
+            verbose_test = ORACLE_VERBOSE.search(tb)
+            verbose_base = ORACLE_VERBOSE.search(baseline_b)
+
+            if status_diff:
+                diffs_found.append(f"Status oracle: {test_email} → {ts} (nonexist:{baseline_s})")
+            if body_diff and (enrolled_in_test != enrolled_in_base):
+                diffs_found.append(f"Body oracle: {test_email} body={len(tb)} vs nonexist={len(baseline_b)}")
+            if enrolled_in_test and not enrolled_in_base:
+                diffs_found.append(f"Enrollment leak: '{test_email}' triggers enrollment response")
+            if verbose_test and str(verbose_test.group(0)) != str((verbose_base or "and").group(0) if verbose_base else ""):
+                diffs_found.append(f"Verbose response: {verbose_test.group(0)[:60]!r}")
+
+        if diffs_found or ORACLE_VERBOSE.search(baseline_b):
+            ep = Endpoint(url=url, path=path, status=baseline_s,
+                          source="email_oracle", tags={"ACCOUNT_ENUM", "INFO_DISC"})
+            ep.notes.extend(diffs_found[:4])
+            if not diffs_found:
+                ep.notes.append(f"Verbose error on nonexistent email: {ORACLE_VERBOSE.search(baseline_b).group(0)[:60]}")
+            new_eps.append(ep)
+
+        # Also try username param
+        us_s, us_b, _ = await http.get(url, params={"username": NONEXIST_USER})
+        if us_s and us_s == baseline_s:
+            for test_user in ["admin", "root", "test", "support"][:2]:
+                ts2, tb2, _ = await http.get(url, params={"username": test_user})
+                if ts2 != us_s or abs(len(tb2) - len(us_b)) > 30:
+                    ep2 = Endpoint(url=url + "?username=", path=path,
+                                   status=ts2, source="email_oracle",
+                                   tags={"ACCOUNT_ENUM"})
+                    ep2.notes.append(f"Username oracle: '{test_user}' → {ts2} body_diff={abs(len(tb2)-len(us_b))}")
+                    new_eps.append(ep2)
+                    break
+
+    await asyncio.gather(*[probe_oracle(u) for u in oracle_candidates], return_exceptions=True)
+    return new_eps
+
+
+# ── Multi-subdomain runner ────────────────────────────────────────────────────
+
+async def scan_subdomain(http: HTTP, sub_base: str, tech: Set[str], args) -> List[Endpoint]:
+    """Run a reduced scan (wordlist + POST probe + email oracle) on a live subdomain."""
+    print(f"  {C}Scanning subdomain:{RST} {sub_base}")
+    eps: List[Endpoint] = []
+
+    wordlist = build_wordlist(tech)[:300]
+    wl_eps = await probe_paths(http, sub_base, wordlist)
+    eps.extend(wl_eps)
+
+    post_eps = await post_probe_paths(http, sub_base, wordlist[:200])
+    eps.extend(post_eps)
+
+    oracle_eps = await email_oracle_scan(http, sub_base, eps)
+    eps.extend(oracle_eps)
+
+    return eps
 
 
 async def _triage_endpoint(http: HTTP, ep: Endpoint, args) -> None:
