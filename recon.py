@@ -876,10 +876,554 @@ async def passive_crtsh(http: HTTP, host: str) -> List[str]:
     return subs
 
 
+async def passive_hackertarget(http: HTTP, host: str) -> List[str]:
+    subs = []
+    try:
+        api = f"https://api.hackertarget.com/hostsearch/?q={host}"
+        status, body, _ = await http.get(api)
+        if status == 200 and body and "error" not in body.lower()[:50]:
+            for line in body.splitlines():
+                parts = line.split(",")
+                if parts:
+                    subs.append(parts[0].strip())
+    except Exception:
+        pass
+    print(f"  {DIM}HackerTarget: {len(subs)} subdomains{RST}")
+    return subs
+
+
+async def passive_certspotter(http: HTTP, host: str) -> List[str]:
+    subs = []
+    try:
+        api = f"https://api.certspotter.com/v1/issuances?domain={host}&include_subdomains=true&expand=dns_names"
+        status, body, _ = await http.get(api)
+        if status == 200 and body:
+            data = json.loads(body)
+            for entry in data:
+                for name in entry.get("dns_names", []):
+                    n = name.strip().lstrip("*.")
+                    if host in n:
+                        subs.append(n)
+    except Exception:
+        pass
+    subs = list(set(subs))
+    print(f"  {DIM}CertSpotter: {len(subs)} subdomains{RST}")
+    return subs
+
+
+async def passive_rapiddns(http: HTTP, host: str) -> List[str]:
+    subs = []
+    try:
+        api = f"https://rapiddns.io/subdomain/{host}?full=1"
+        status, body, _ = await http.get(api)
+        if status == 200 and body:
+            for m in re.finditer(r'<td>([a-zA-Z0-9._-]+\.' + re.escape(host) + r')</td>', body):
+                subs.append(m.group(1))
+    except Exception:
+        pass
+    subs = list(set(subs))
+    print(f"  {DIM}RapidDNS: {len(subs)} subdomains{RST}")
+    return subs
+
+
+async def passive_bufferover(http: HTTP, host: str) -> List[str]:
+    subs = []
+    try:
+        api = f"https://dns.bufferover.run/dns?q=.{host}"
+        status, body, _ = await http.get(api)
+        if status == 200 and body:
+            data = json.loads(body)
+            for entry in data.get("FDNS_A", []) + data.get("RDNS", []):
+                parts = entry.split(",")
+                if len(parts) >= 2:
+                    name = parts[1].strip().rstrip(".")
+                    if host in name:
+                        subs.append(name)
+    except Exception:
+        pass
+    subs = list(set(subs))
+    print(f"  {DIM}BufferOver: {len(subs)} subdomains{RST}")
+    return subs
+
+
+async def passive_threatcrowd(http: HTTP, host: str) -> List[str]:
+    subs = []
+    try:
+        api = f"https://www.threatcrowd.org/searchApi/v2/domain/report/?domain={host}"
+        status, body, _ = await http.get(api)
+        if status == 200 and body:
+            data = json.loads(body)
+            subs = [s for s in data.get("subdomains", []) if host in s]
+    except Exception:
+        pass
+    print(f"  {DIM}ThreatCrowd: {len(subs)} subdomains{RST}")
+    return subs
+
+
+async def passive_jldc(http: HTTP, host: str) -> List[str]:
+    subs = []
+    try:
+        api = f"https://jldc.me/anubis/subdomains/{host}"
+        status, body, _ = await http.get(api)
+        if status == 200 and body:
+            data = json.loads(body)
+            if isinstance(data, list):
+                subs = [s for s in data if isinstance(s, str) and host in s]
+    except Exception:
+        pass
+    print(f"  {DIM}JLDC/Anubis: {len(subs)} subdomains{RST}")
+    return subs
+
+
+async def passive_shodan_internetdb(http: HTTP, host: str) -> List[dict]:
+    """Shodan InternetDB — no API key, returns open ports + CVEs for IPs."""
+    import socket
+    results = []
+    try:
+        ips = set()
+        for res in socket.getaddrinfo(host, None):
+            ips.add(res[4][0])
+        for ip in list(ips)[:5]:
+            status, body, _ = await http.get(f"https://internetdb.shodan.io/{ip}")
+            if status == 200 and body:
+                data = json.loads(body)
+                results.append({"ip": ip, "ports": data.get("ports", []),
+                                 "cpes": data.get("cpes", []),
+                                 "vulns": data.get("vulns", []),
+                                 "hostnames": data.get("hostnames", []),
+                                 "tags": data.get("tags", [])})
+    except Exception:
+        pass
+    if results:
+        total_vulns = sum(len(r["vulns"]) for r in results)
+        print(f"  {DIM}Shodan InternetDB: {len(results)} IPs, {total_vulns} CVEs{RST}")
+    return results
+
+
+async def passive_github_dork(http: HTTP, host: str) -> List[str]:
+    """Search GitHub for exposed secrets/configs referencing the target domain."""
+    findings = []
+    company = host.split(".")[0]
+    dorks = [
+        f'"{host}" "api_key"',
+        f'"{host}" "secret_key"',
+        f'"{host}" "password"',
+        f'"{company}" "internal" "api"',
+        f'"{host}" filename:.env',
+        f'"{host}" extension:json "apiKey"',
+        f'"{company}" "JWT_SECRET"',
+        f'"{company}" "DATABASE_URL"',
+    ]
+    for dork in dorks[:4]:
+        encoded = urllib.parse.quote(dork)
+        api = f"https://api.github.com/search/code?q={encoded}&per_page=5"
+        status, body, _ = await http.get(api, headers={"Accept": "application/vnd.github.v3+json"})
+        if status == 200 and body:
+            try:
+                data = json.loads(body)
+                for item in data.get("items", [])[:3]:
+                    findings.append(f"GitHub: {item.get('html_url','')} — {item.get('name','')}")
+            except Exception:
+                pass
+    if findings:
+        print(f"  {R}GitHub dork hits: {len(findings)}{RST}")
+    else:
+        print(f"  {DIM}GitHub dork: no public hits{RST}")
+    return findings
+
+
 def extract_host(base: str) -> str:
     parsed = urllib.parse.urlparse(base)
     host = parsed.hostname or ""
     return re.sub(r"^www\.", "", host)
+
+
+# ── Third-party provider detection ───────────────────────────────────────────
+
+PROVIDERS = {
+    # ── Feature flags ─────────────────────────────────────────────────────
+    "launchdarkly": {
+        "patterns": [r"app\.launchdarkly\.com", r"LDClient", r"clientSideID", r"ld-relay"],
+        "category": "Feature Flags",
+        "risk": "HIGH",
+        "notes": [
+            "LaunchDarkly detected — enumerate feature flags via SDK client-side ID",
+            "Attack: GET https://app.launchdarkly.com/sdk/latest-all → lists all flags + targeting rules",
+            "Flags often gate admin panels, unreleased features, payment bypasses",
+            "Search JS for clientSideID → use LD SDK to dump all flag values",
+        ],
+        "extra_paths": ["flags/", "feature-flags/", "api/v1/flags", "admin/feature-flags", "launchdarkly/"],
+    },
+    "split_io": {
+        "patterns": [r"sdk\.split\.io", r"SplitFactory", r"split\.io"],
+        "category": "Feature Flags",
+        "risk": "HIGH",
+        "notes": ["Split.io feature flags detected — check JS for SDK key", "Enumerate treatments/splits"],
+        "extra_paths": ["api/v1/splits", "splits/", "treatments/"],
+    },
+    "unleash": {
+        "patterns": [r"/api/client/features", r"unleash", r"UnleashClient"],
+        "category": "Feature Flags",
+        "risk": "HIGH",
+        "notes": ["Unleash feature flags — try GET /api/client/features (often unauthenticated)"],
+        "extra_paths": ["api/client/features", "api/admin/features", "unleash/"],
+    },
+    "optimizely": {
+        "patterns": [r"cdn\.optimizely\.com", r"optimizely\.com/datafiles", r"window\.optimizely"],
+        "category": "Feature Flags / A/B",
+        "risk": "MEDIUM",
+        "notes": ["Optimizely detected — datafile URL in JS may expose experiment configs"],
+        "extra_paths": [],
+    },
+    # ── Auth providers ────────────────────────────────────────────────────
+    "auth0": {
+        "patterns": [r"\.auth0\.com", r"Auth0Provider", r"auth0-spa-js", r"cdn\.auth0\.com"],
+        "category": "Auth",
+        "risk": "HIGH",
+        "notes": [
+            "Auth0 detected — check for open redirect in callback URL",
+            "Test: /authorize?response_type=token&redirect_uri=https://evil.com",
+            "Look for client_id in JS → brute grant_type=client_credentials",
+            "Check tenant at https://TENANT.auth0.com/.well-known/openid-configuration",
+        ],
+        "extra_paths": [".well-known/openid-configuration", "authorize", "oauth/token",
+                        "v2/logout", "api/v2/users", "api/v2/clients"],
+    },
+    "okta": {
+        "patterns": [r"\.okta\.com", r"OktaAuth", r"okta-auth-js", r"\.oktapreview\.com"],
+        "category": "Auth",
+        "risk": "HIGH",
+        "notes": [
+            "Okta SSO detected — test for open redirect in state param",
+            "Enumerate: /api/v1/users?limit=200 (often needs token but 403 confirms existence)",
+            "Check for Okta admin panel: /admin/dashboard",
+        ],
+        "extra_paths": ["api/v1/users", "api/v1/apps", "api/v1/groups", "oauth2/default/.well-known/openid-configuration"],
+    },
+    "firebase_auth": {
+        "patterns": [r"firebase\.googleapis\.com", r"initializeApp", r"firebaseConfig", r"identitytoolkit"],
+        "category": "Auth / Database",
+        "risk": "CRITICAL",
+        "notes": [
+            "Firebase detected — extract apiKey from JS firebaseConfig",
+            "Test open DB rules: https://PROJECT.firebaseio.com/.json",
+            "Test Storage: https://firebasestorage.googleapis.com/v0/b/PROJECT.appspot.com/o",
+            "Check Firestore: https://firestore.googleapis.com/v1/projects/PROJECT/databases/(default)/documents",
+            "Sign up anonymously with API key → attempt reads with new uid token",
+        ],
+        "extra_paths": [],
+    },
+    "supabase": {
+        "patterns": [r"supabase\.co", r"createClient.*supabase", r"SUPABASE_URL", r"supabase-js"],
+        "category": "Auth / Database",
+        "risk": "CRITICAL",
+        "notes": [
+            "Supabase detected — extract anon key from JS",
+            "Test RLS bypass: GET /rest/v1/users?select=* with anon key",
+            "Often exposes all table data if RLS not configured",
+            "Check: /rest/v1/ for table listing with anon key",
+        ],
+        "extra_paths": ["rest/v1/", "auth/v1/", "storage/v1/", "functions/v1/"],
+    },
+    "cognito": {
+        "patterns": [r"cognito-idp\.", r"CognitoUserPool", r"amazon-cognito", r"cognito\.amazonaws"],
+        "category": "Auth",
+        "risk": "HIGH",
+        "notes": [
+            "AWS Cognito detected — extract User Pool ID + Client ID from JS",
+            "Test: unauthenticated sign-up if allowed (createUserPool has allowUnauthenticatedIdentities?)",
+            "Try account enumeration via forgot-password flow",
+        ],
+        "extra_paths": [],
+    },
+    "clerk": {
+        "patterns": [r"clerk\.dev", r"clerk\.com", r"ClerkProvider", r"@clerk/"],
+        "category": "Auth",
+        "risk": "MEDIUM",
+        "notes": ["Clerk auth detected — check /api/clerk/ proxy endpoints", "Test JWT with expired session tokens"],
+        "extra_paths": ["api/clerk/", ".clerk/", "sign-in", "sign-up"],
+    },
+    # ── Payment providers ──────────────────────────────────────────────────
+    "stripe": {
+        "patterns": [r"js\.stripe\.com", r"Stripe\(", r"pk_live_", r"pk_test_", r"stripe-js"],
+        "category": "Payment",
+        "risk": "HIGH",
+        "notes": [
+            "Stripe detected — look for pk_live_ key in JS (harmless but confirms live mode)",
+            "Check webhook endpoint for signature verification bypass",
+            "Test: POST /webhook with stripe-signature: missing → if 200 returned, no verification",
+            "Enumerate: /api/v1/payment-methods, /api/v1/invoices (IDOR)",
+        ],
+        "extra_paths": ["webhook", "webhooks/stripe", "api/v1/webhook", "stripe/webhook",
+                        "api/v1/payment-methods", "api/v1/invoices", "api/v1/billing"],
+    },
+    "braintree": {
+        "patterns": [r"js\.braintreegateway\.com", r"braintree-web", r"braintree\.com"],
+        "category": "Payment",
+        "risk": "HIGH",
+        "notes": ["Braintree detected — check client token generation endpoint for IDOR",
+                  "Test: /api/v1/client-token, /payment/token with other user IDs"],
+        "extra_paths": ["api/v1/client-token", "payment/token", "braintree/token"],
+    },
+    # ── Analytics / tracking ───────────────────────────────────────────────
+    "segment": {
+        "patterns": [r"cdn\.segment\.com", r"analytics\.js", r"window\.analytics", r"Segment\.io"],
+        "category": "Analytics",
+        "risk": "MEDIUM",
+        "notes": [
+            "Segment analytics detected — find write key in JS",
+            "Write key allows injecting fake events → manipulate analytics",
+            "Check: /v1/t (track), /v1/i (identify), /v1/p (page) endpoints",
+        ],
+        "extra_paths": [],
+    },
+    "mixpanel": {
+        "patterns": [r"cdn\.mxpnl\.com", r"mixpanel\.init", r"mixpanel-browser"],
+        "category": "Analytics",
+        "risk": "LOW",
+        "notes": ["Mixpanel detected — project token in JS. Token allows event injection."],
+        "extra_paths": [],
+    },
+    "amplitude": {
+        "patterns": [r"cdn\.amplitude\.com", r"amplitude-js", r"Amplitude\.getInstance"],
+        "category": "Analytics",
+        "risk": "LOW",
+        "notes": ["Amplitude detected — API key in JS. Check for user property leaks."],
+        "extra_paths": [],
+    },
+    "fullstory": {
+        "patterns": [r"fullstory\.com/s/fs\.js", r"FS\.identify", r"window\._fs_"],
+        "category": "Session Recording",
+        "risk": "INFO",
+        "notes": ["FullStory session recording — may capture PII/form inputs including passwords"],
+        "extra_paths": [],
+    },
+    "hotjar": {
+        "patterns": [r"static\.hotjar\.com", r"hj\(", r"_hjSettings"],
+        "category": "Session Recording",
+        "risk": "INFO",
+        "notes": ["Hotjar session recording detected — check if sensitive pages are excluded"],
+        "extra_paths": [],
+    },
+    # ── Customer support ───────────────────────────────────────────────────
+    "intercom": {
+        "patterns": [r"widget\.intercom\.io", r"Intercom\(", r"intercomSettings", r"app_id.*intercom"],
+        "category": "Support",
+        "risk": "MEDIUM",
+        "notes": [
+            "Intercom detected — app_id visible in JS",
+            "Check: user_hash (HMAC) generated server-side — if missing, identity spoofing possible",
+            "Test: Intercom with no user_hash → impersonate any user_id",
+        ],
+        "extra_paths": [],
+    },
+    "zendesk": {
+        "patterns": [r"\.zendesk\.com", r"zE\(", r"zESettings", r"zendesk-widget"],
+        "category": "Support",
+        "risk": "MEDIUM",
+        "notes": ["Zendesk detected — check /api/v2/users.json if API accessible",
+                  "Subdomain often: COMPANY.zendesk.com — probe for ticket IDOR"],
+        "extra_paths": ["api/v2/users.json", "api/v2/tickets.json", "hc/api/v2/"],
+    },
+    # ── Internal tools / BI ────────────────────────────────────────────────
+    "retool": {
+        "patterns": [r"retool\.com", r"retoolusercontent\.com", r"RetoolApp"],
+        "category": "Internal Tool",
+        "risk": "CRITICAL",
+        "notes": [
+            "Retool internal tool detected — often accessible without auth on internal network",
+            "Check: https://COMPANY.retool.com — may expose admin ops, DB queries, user management",
+            "Look for retool embed in app — iframe src may reveal internal Retool URL",
+        ],
+        "extra_paths": [],
+    },
+    "metabase": {
+        "patterns": [r"metabase", r"/api/session", r"metabase\.com"],
+        "category": "BI / Analytics",
+        "risk": "HIGH",
+        "notes": [
+            "Metabase BI tool detected",
+            "Default creds: admin@metabase.local / metabase1234",
+            "Check /api/session for unauthenticated access, /api/database for DB connection strings",
+        ],
+        "extra_paths": ["api/session", "api/database", "api/user", "api/card", "api/dashboard"],
+    },
+    "grafana": {
+        "patterns": [r"grafana", r"/api/dashboards", r"grafana\.ini"],
+        "category": "Monitoring",
+        "risk": "HIGH",
+        "notes": [
+            "Grafana detected — default creds: admin/admin",
+            "Check /api/dashboards/home, /api/org/users, /api/datasources",
+            "Unauthenticated: try /api/snapshots, /render/ (SSRF)",
+        ],
+        "extra_paths": ["api/dashboards/home", "api/org/users", "api/datasources",
+                        "api/snapshots", "login", "render/"],
+    },
+    "kibana": {
+        "patterns": [r"kibana", r"elastic\.co", r"__es__", r"kbn-version"],
+        "category": "Monitoring",
+        "risk": "HIGH",
+        "notes": [
+            "Kibana/Elasticsearch detected",
+            "Try: GET /_cat/indices, GET /_cluster/health, GET /users/_search",
+            "Check for unauthenticated Elasticsearch: port 9200",
+        ],
+        "extra_paths": ["_cat/indices", "_cluster/health", "_all/_search", "app/kibana"],
+    },
+    # ── CDN / hosting ──────────────────────────────────────────────────────
+    "cloudflare": {
+        "patterns": [r"cf-ray", r"cloudflare", r"__cf_bm", r"cf-cache-status"],
+        "category": "CDN",
+        "risk": "INFO",
+        "notes": ["Cloudflare WAF/CDN detected — test cache poisoning, CF-specific bypass headers"],
+        "extra_paths": [],
+    },
+    "fastly": {
+        "patterns": [r"x-fastly", r"fastly-restarts", r"Fastly"],
+        "category": "CDN",
+        "risk": "INFO",
+        "notes": ["Fastly CDN detected — check X-Cache, Surrogate-Key headers for cache poisoning"],
+        "extra_paths": [],
+    },
+    "vercel": {
+        "patterns": [r"\.vercel\.app", r"x-vercel-", r"vercel\.com"],
+        "category": "Hosting",
+        "risk": "MEDIUM",
+        "notes": ["Vercel hosting detected — check for preview deployments at *.vercel.app",
+                  "Look for exposed .env in deployment via /_next/static/chunks/"],
+        "extra_paths": ["_next/static/chunks/", "_next/data/", "api/"],
+    },
+    "netlify": {
+        "patterns": [r"\.netlify\.app", r"x-nf-request-id", r"netlify"],
+        "category": "Hosting",
+        "risk": "MEDIUM",
+        "notes": ["Netlify hosting — check /.netlify/functions/ for exposed serverless functions"],
+        "extra_paths": [".netlify/functions/", "netlify/functions/", "api/"],
+    },
+    # ── Search ─────────────────────────────────────────────────────────────
+    "algolia": {
+        "patterns": [r"algolia\.net", r"algoliasearch", r"AlgoliaSearch", r"X-Algolia-API-Key"],
+        "category": "Search",
+        "risk": "HIGH",
+        "notes": [
+            "Algolia search detected — find API key + App ID in JS",
+            "Search key may expose ALL index records via GET /1/indexes/INDEX/browse",
+            "Test: if admin API key exposed → full index read/write",
+        ],
+        "extra_paths": [],
+    },
+    # ── Error tracking ─────────────────────────────────────────────────────
+    "sentry": {
+        "patterns": [r"browser\.sentry-cdn\.com", r"Sentry\.init", r"sentry\.io", r"dsn.*sentry"],
+        "category": "Error Tracking",
+        "risk": "MEDIUM",
+        "notes": [
+            "Sentry detected — DSN in JS allows sending fake events to their Sentry project",
+            "DSN format: https://KEY@sentry.io/PROJECT_ID",
+            "More importantly: Sentry often captures full request/response bodies — check for PII leaks",
+        ],
+        "extra_paths": [],
+    },
+    # ── Communication ──────────────────────────────────────────────────────
+    "twilio": {
+        "patterns": [r"twilio\.com", r"TwilioClient", r"AC[a-z0-9]{32}"],
+        "category": "SMS/Voice",
+        "risk": "HIGH",
+        "notes": ["Twilio detected — account SID in JS format AC... is low risk alone but confirms Twilio use",
+                  "Check webhook endpoints for missing auth → replay attacks on SMS verification"],
+        "extra_paths": ["api/v1/sms/webhook", "webhooks/twilio", "twilio/webhook"],
+    },
+    # ── CMS ────────────────────────────────────────────────────────────────
+    "contentful": {
+        "patterns": [r"cdn\.contentful\.com", r"contentfulClient", r"ctfl-"],
+        "category": "CMS",
+        "risk": "MEDIUM",
+        "notes": ["Contentful CMS — find space_id + access_token in JS",
+                  "CDN token (read-only) in JS is expected — check for management token exposure"],
+        "extra_paths": [],
+    },
+    # ── Infra internal tools pattern (like Robinhood Bonfire) ──────────────
+    "_custom_internal_tool": {
+        "patterns": [r"bonfire\.", r"phoenix\.", r"backstage\.", r"launchpad\.",
+                     r"mission-control\.", r"tower\.", r"runway\.", r"hangar\.",
+                     r"control-plane\.", r"mission\.", r"cockpit\."],
+        "category": "Internal Tool",
+        "risk": "CRITICAL",
+        "notes": [
+            "Custom internal tool subdomain pattern detected",
+            "Internal tools often have weaker auth — check if accessible without VPN",
+            "Probe all endpoints: admin APIs, user management, feature gates, financial operations",
+        ],
+        "extra_paths": ["api/", "admin/", "users/", "internal/"],
+    },
+}
+
+
+async def detect_providers(http: HTTP, base: str) -> Dict[str, dict]:
+    """Scan HTML, JS, headers, and cookies for third-party provider signatures."""
+    detected: Dict[str, dict] = {}
+
+    # Fetch main page + common JS entry points
+    pages_to_scan = [base, base.rstrip("/") + "/login",
+                     base.rstrip("/") + "/app",
+                     base.rstrip("/") + "/dashboard"]
+    full_text = ""
+    all_headers: Dict[str, str] = {}
+
+    for url in pages_to_scan[:3]:
+        status, body, headers = await http.get(url)
+        if body:
+            full_text += body
+        all_headers.update(headers)
+
+    header_str = " ".join(f"{k}: {v}" for k, v in all_headers.items())
+    scan_text = (full_text + " " + header_str).lower()
+
+    for provider, info in PROVIDERS.items():
+        for pattern in info["patterns"]:
+            if re.search(pattern, full_text + header_str, re.I):
+                detected[provider] = info
+                break
+
+    if detected:
+        cats = defaultdict(list)
+        for name, info in detected.items():
+            cats[info["category"]].append(name)
+        print(f"  {M}Providers detected:{RST}")
+        for cat, names in sorted(cats.items()):
+            print(f"    {DIM}{cat}:{RST} {', '.join(names)}")
+
+    return detected
+
+
+def provider_attack_paths(detected: Dict[str, dict]) -> List[str]:
+    """Return extra paths to probe based on detected providers."""
+    paths: List[str] = []
+    for info in detected.values():
+        paths.extend(info.get("extra_paths", []))
+    return list(dict.fromkeys(paths))
+
+
+def provider_findings_to_endpoints(detected: Dict[str, dict], base: str) -> List[Endpoint]:
+    """Convert provider detections into Endpoint objects with notes."""
+    eps: List[Endpoint] = []
+    risk_to_tags = {
+        "CRITICAL": {"INFO_DISC", "AUTH_BYPASS", "ADMIN"},
+        "HIGH":     {"INFO_DISC", "AUTH_BYPASS"},
+        "MEDIUM":   {"INFO_DISC"},
+        "LOW":      {"INFO_DISC"},
+        "INFO":     {"INFO_DISC"},
+    }
+    for name, info in detected.items():
+        ep = Endpoint(
+            url=base, path=f"[PROVIDER:{name}]",
+            status=200, source="provider_detection",
+            tags=risk_to_tags.get(info["risk"], {"INFO_DISC"}),
+        )
+        ep.notes = [f"[{info['category']} / {info['risk']}] {n}" for n in info["notes"]]
+        eps.append(ep)
+    return eps
 
 
 # ── Crawling ──────────────────────────────────────────────────────────────────
@@ -1597,9 +2141,36 @@ def print_report(endpoints: List[Endpoint], tech: Set[str], passive_subdomains: 
         print()
 
     if sourcemap_secrets:
-        print(f"{R}[Source Map Secrets]{RST}")
-        for s in sourcemap_secrets:
-            print(f"  {R}★{RST} {s}")
+        # Split into categories
+        shodan_items  = [s for s in sourcemap_secrets if s.startswith("[SHODAN]")]
+        github_items  = [s for s in sourcemap_secrets if s.startswith("[GITHUB")]
+        secret_items  = [s for s in sourcemap_secrets if not s.startswith(("[SHODAN]", "[GITHUB"))]
+        if shodan_items:
+            print(f"{R}[Shodan — Open Ports / CVEs]{RST}")
+            for s in shodan_items:
+                print(f"  {R}★{RST} {s}")
+            print()
+        if github_items:
+            print(f"{R}[GitHub Dork Hits — Potential Secret Exposure]{RST}")
+            for s in github_items:
+                print(f"  {R}★{RST} {s}")
+            print()
+        if secret_items:
+            print(f"{R}[JS / Source Map Secrets]{RST}")
+            for s in secret_items:
+                print(f"  {R}★{RST} {s}")
+            print()
+
+    # Provider summary
+    provider_eps_list = [ep for ep in endpoints if ep.source == "provider_detection"]
+    if provider_eps_list:
+        print(f"{M}[Third-Party Providers Detected]{RST}")
+        for ep in provider_eps_list:
+            name = ep.path.replace("[PROVIDER:", "").rstrip("]")
+            risk = next((n.split("]")[0].split("/")[-1].strip() for n in ep.notes if "]" in n), "?")
+            print(f"  {M}●{RST} {W}{name}{RST}  {DIM}({risk}){RST}")
+            for note in ep.notes[:3]:
+                print(f"    {DIM}→ {note}{RST}")
         print()
 
     # Stats
@@ -1745,24 +2316,60 @@ async def run(args):
         tech = await fingerprint(http, base)
         tech.update(forced_tech)
 
-        # ── Phase 1: Passive recon ────────────────────────────────────────────
+        # ── Phase 1: Passive recon (9 sources) ───────────────────────────────
         passive_subdomains: List[str] = []
+        shodan_results: List[dict] = []
+        github_dork_hits: List[str] = []
         if not args.no_passive:
-            print(f"\n{BOLD}{B}[Phase 1] Passive Recon{RST}")
+            print(f"\n{BOLD}{B}[Phase 1] Passive Recon — 9 sources{RST}")
             tasks = [
                 passive_wayback(http, host),
                 passive_urlscan(http, host),
                 passive_commoncrawl(http, host),
                 passive_otx(http, host),
                 passive_crtsh(http, host),
+                passive_hackertarget(http, host),
+                passive_certspotter(http, host),
+                passive_rapiddns(http, host),
+                passive_bufferover(http, host),
+                passive_threatcrowd(http, host),
+                passive_jldc(http, host),
+                passive_shodan_internetdb(http, host),
+                passive_github_dork(http, host),
             ]
-            results = await asyncio.gather(*tasks)
-            wayback_urls, urlscan_urls, cc_urls, otx_urls, subdomains = results
-            passive_subdomains = subdomains
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            (wayback_urls, urlscan_urls, cc_urls, otx_urls,
+             crtsh_subs, ht_subs, cs_subs, rd_subs, bo_subs,
+             tc_subs, jl_subs, shodan_res, gh_hits) = [
+                r if not isinstance(r, Exception) else [] for r in results
+            ]
+
+            # Merge all subdomain sources
+            all_sub_lists = [crtsh_subs, ht_subs, cs_subs, rd_subs, bo_subs, tc_subs, jl_subs]
+            passive_subdomains = list(set(s for lst in all_sub_lists
+                                         for s in (lst if isinstance(lst, list) else [])))
+            shodan_results = shodan_res if isinstance(shodan_res, list) else []
+            github_dork_hits = gh_hits if isinstance(gh_hits, list) else []
+
+            print(f"  {G}Total unique subdomains:{RST} {len(passive_subdomains)}")
+
+            if shodan_results:
+                for r in shodan_results:
+                    vuln_count = len(r.get("vulns", []))
+                    if vuln_count:
+                        sourcemap_secrets.append(
+                            f"[SHODAN] {r['ip']} open ports {r['ports']} CVEs: {', '.join(r['vulns'][:5])}"
+                        )
+
+            if github_dork_hits:
+                for hit in github_dork_hits:
+                    sourcemap_secrets.append(f"[GITHUB DORK] {hit}")
 
             # Deduplicate and extract paths from passive URLs
-            passive_paths = set()
+            passive_paths: Set[str] = set()
             for url_list in [wayback_urls, urlscan_urls, cc_urls, otx_urls]:
+                if not isinstance(url_list, list):
+                    continue
                 for u in url_list:
                     try:
                         p = urllib.parse.urlparse(u)
@@ -1774,11 +2381,21 @@ async def run(args):
                         pass
             print(f"  {G}Passive paths extracted:{RST} {len(passive_paths)}")
 
-            # Probe passive paths
             if passive_paths:
                 passive_eps = await probe_paths(http, base, list(passive_paths)[:1000])
                 all_endpoints.extend(passive_eps)
                 print(f"  {G}Passive endpoints found:{RST} {len(passive_eps)}")
+
+        # ── Phase 1b: Provider detection ─────────────────────────────────────
+        print(f"\n{BOLD}{B}[Phase 1b] Third-Party Provider Detection{RST}")
+        detected_providers = await detect_providers(http, base)
+        provider_eps = provider_findings_to_endpoints(detected_providers, base)
+        all_endpoints.extend(provider_eps)
+        extra_provider_paths = provider_attack_paths(detected_providers)
+        if extra_provider_paths:
+            print(f"  {G}Provider-specific paths to probe:{RST} {len(extra_provider_paths)}")
+            prov_probe_eps = await probe_paths(http, base, extra_provider_paths)
+            all_endpoints.extend(prov_probe_eps)
 
         # ── Phase 2: Active crawl + JS scanning ──────────────────────────────
         js_urls_all: List[str] = []
