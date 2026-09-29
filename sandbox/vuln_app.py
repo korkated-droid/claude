@@ -295,6 +295,148 @@ def whoami():
         return jsonify({"error": str(e)}), 400
 
 
+# ── NoSQL Injection (MongoDB-style auth bypass) ───────────────────────────
+
+@app.route("/api/nosql/login", methods=["POST"])
+def nosql_login():
+    data = request.get_json() or {}
+    username = data.get("username", "")
+    password = data.get("password", "")
+    # Vuln: accepts operator objects — {"$gt": ""} bypasses check
+    if isinstance(password, dict) or isinstance(username, dict):
+        return jsonify({"token": make_token(3, "admin"), "note": "FLAG{nosql_injection_auth_bypass}", "user": "admin"})
+    for uid, u in USERS.items():
+        if u["username"] == username:
+            return jsonify({"token": make_token(uid, u["role"]), "user_id": uid})
+    return jsonify({"error": "Invalid credentials"}), 401
+
+
+# ── SSTI (Jinja2-style template rendering) ────────────────────────────────
+
+@app.route("/api/render")
+def ssti_render():
+    # Vuln: renders user input as Jinja2 template
+    template = request.args.get("template", "Hello {{ name }}")
+    name = request.args.get("name", "world")
+    # Safe simulation — shows reflection without real eval
+    if "{{" in template and "}}" in template:
+        rendered = template.replace("{{ name }}", name).replace("{{name}}", name)
+        # Detect classic SSTI payloads
+        if any(p in template for p in ["7*7", "7*'7'", "__class__", "config", "self"]):
+            rendered = "49"  # 7*7 = 49 is the classic SSTI canary
+            if "__class__" in template or "config" in template:
+                rendered = "FLAG{ssti_rce_achieved} <Config {'DEBUG': True, 'SECRET_KEY': 'secret123'}>"
+        return jsonify({"rendered": rendered, "input": template})
+    return jsonify({"rendered": name, "input": template})
+
+
+# ── Race Condition (coupon / balance transfer) ────────────────────────────
+
+COUPONS = {"SAVE10": {"discount": 10, "used_by": []}}
+
+@app.route("/api/v1/coupon/apply", methods=["POST"])
+@auth_required
+def apply_coupon():
+    data = request.get_json() or {}
+    code = data.get("code", "")
+    coupon = COUPONS.get(code)
+    if not coupon:
+        return jsonify({"error": "Invalid coupon"}), 404
+    # Vuln: race condition — check-then-act without atomic lock
+    if g.user_id in coupon["used_by"]:
+        return jsonify({"error": "Coupon already used"}), 409
+    import time; time.sleep(0.05)  # simulate DB latency — widens race window
+    coupon["used_by"].append(g.user_id)
+    user = USERS[g.user_id]
+    user["balance"] += coupon["discount"]
+    return jsonify({"message": f"Discount applied: +{coupon['discount']}", "balance": user["balance"]})
+
+
+# ── XXE / XML Upload ──────────────────────────────────────────────────────
+
+@app.route("/api/v1/import/xml", methods=["POST"])
+@auth_required
+def import_xml():
+    from xml.etree import ElementTree as ET
+    body = request.data or b""
+    content_type = request.content_type or ""
+    if "xml" not in content_type and not body.strip().startswith(b"<"):
+        return jsonify({"error": "Expected XML body"}), 400
+    try:
+        # Vuln: parses XML without disabling external entities
+        root = ET.fromstring(body)
+        result = {child.tag: child.text for child in root}
+        # Simulate XXE — if DOCTYPE entity expansion happened
+        for v in result.values():
+            if v and ("root:" in str(v) or "FLAG" in str(v)):
+                return jsonify({"parsed": result, "note": "FLAG{xxe_file_read_success}"})
+        return jsonify({"parsed": result})
+    except ET.ParseError as e:
+        return jsonify({"error": f"XML parse error: {e}"}), 400
+
+
+# ── Deserialization Detection ─────────────────────────────────────────────
+
+@app.route("/api/v1/session/restore", methods=["POST"])
+def restore_session():
+    # Vuln: accepts raw pickle-like blobs (simulated — no real eval)
+    import base64
+    data = request.data
+    content_type = request.content_type or ""
+    if not data:
+        return jsonify({"error": "No body"}), 400
+    # Detect serialization magic bytes
+    if data[:2] == b"\xac\xed":
+        return jsonify({"error": "Java deserialization not supported", "hint": "FLAG{java_deser_gadget_chain}"})
+    if data[:2] == b"\x80\x04" or data[:1] == b"\x80":
+        return jsonify({"error": "Python pickle rejected", "hint": "FLAG{python_pickle_rce}"})
+    try:
+        decoded = base64.b64decode(data)
+        return jsonify({"session": decoded.decode(errors="replace")[:200]})
+    except Exception:
+        return jsonify({"error": "Invalid session data"}), 400
+
+
+# ── Host Header Injection ─────────────────────────────────────────────────
+
+@app.route("/api/v1/password/reset", methods=["POST"])
+def password_reset():
+    data = request.get_json() or {}
+    email = data.get("email", "")
+    host = request.headers.get("Host", "localhost:7777")
+    x_host = request.headers.get("X-Forwarded-Host", host)
+    # Vuln: uses user-supplied Host header in reset link
+    reset_link = f"https://{x_host}/reset?token=FAKE_TOKEN_12345"
+    return jsonify({
+        "message": f"Password reset sent to {email}",
+        "reset_link": reset_link,
+        "note": "FLAG{host_header_password_reset_poison}" if x_host != "localhost:7777" else "reset link generated"
+    })
+
+
+# ── Open Redirect ─────────────────────────────────────────────────────────
+
+@app.route("/api/v1/redirect")
+def open_redirect():
+    # Vuln: no validation of redirect destination
+    url = request.args.get("url", "/")
+    return jsonify({"redirect": url, "note": "FLAG{open_redirect}" if "://" in url and "localhost" not in url else "internal redirect"})
+
+
+# ── Cache Poisoning headers reflected ────────────────────────────────────
+
+@app.route("/api/v1/cached")
+def cached_endpoint():
+    # Vuln: reflects unkeyed headers into response
+    x_custom = request.headers.get("X-Forwarded-Host", "")
+    x_scheme = request.headers.get("X-Forwarded-Scheme", "https")
+    resp = {"data": "cached content", "version": "1.0"}
+    if x_custom:
+        resp["x_forwarded_host"] = x_custom
+        resp["note"] = "FLAG{cache_poison_reflected}"
+    return jsonify(resp)
+
+
 if __name__ == "__main__":
     # Seed a sandbox file for path traversal demo
     os.makedirs("/tmp/sandbox_files", exist_ok=True)
