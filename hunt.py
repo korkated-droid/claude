@@ -43,7 +43,8 @@ OPTIONS
 
 PIPELINE
 ────────
-  Phase 0: stealth      — WAF detection, real IP discovery, rate limit probe
+  Phase 0: infra        — Port scan, ASN/CIDR, cloud storage, GitHub secrets, favicon hash
+  Phase 0b: stealth     — WAF detection, real IP discovery, rate limit probe
   Phase 1: recon.py     — passive OSINT + endpoint discovery + email oracle
   Phase 2: gov_level.py — 25 advanced red-team checks
   Phase 3: CVE modules  — 22 core CVE exploit probes
@@ -152,6 +153,12 @@ try:
     _HAS_TOOLS = True
 except ImportError:
     _HAS_TOOLS = False
+
+try:
+    from infra import enumerate_infrastructure, InfraResult
+    _HAS_INFRA = True
+except ImportError:
+    _HAS_INFRA = False
 
 # ── ANSI ──────────────────────────────────────────────────────────────────────
 
@@ -1632,6 +1639,10 @@ async def main():
     parser.add_argument("--tools", action="store_true", help="Run external tools (nuclei, ffuf, sqlmap, dalfox, etc.)")
     parser.add_argument("--tools-only", help="Comma-separated tool list: nuclei,ffuf,sqlmap")
     parser.add_argument("--no-extended", action="store_true", help="Skip cve_extended.py modules")
+    parser.add_argument("--infra", action="store_true", help="Run infrastructure phase (ports, ASN, buckets, GitHub)")
+    parser.add_argument("--full-ports", action="store_true", help="Full 1-65535 port scan during infra phase")
+    parser.add_argument("--asn-range", action="store_true", help="Reverse-DNS scan ASN CIDR ranges (slow)")
+    parser.add_argument("--github-org", help="GitHub org to scan for secrets (e.g. --github-org robinhood)")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -1648,12 +1659,94 @@ async def main():
     gov_data = None
     all_findings: List[Finding] = []
     waf_result = None
+    infra_result = None
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
-    # ── Phase 0: Stealth / WAF detection ─────────────────────────────────────
+    # ── Phase 0: Infrastructure Enumeration ───────────────────────────────────
+    if (args.infra or getattr(args, "github_org", None)) and _HAS_INFRA:
+        try:
+            infra_result = await enumerate_infrastructure(
+                target=base,
+                outdir=outdir,
+                full_port_scan=getattr(args, "full_ports", False),
+                scan_asn_range=getattr(args, "asn_range", False),
+                buckets=True,
+                github_org=getattr(args, "github_org", "") or "",
+                verbose=args.verbose,
+                concurrency=args.concurrency,
+            )
+            # Promote critical infra findings to all_findings
+            for bucket in infra_result.storage_buckets:
+                if bucket.get("status") == "open":
+                    all_findings.append(Finding(
+                        cve="INFRA-S3-OPEN",
+                        severity="CRITICAL",
+                        title=f"Open {bucket['service'].upper()} Bucket: {bucket['url']}",
+                        url=bucket["url"],
+                        evidence=f"Bucket listing accessible. Keys: {bucket.get('keys_preview',[])}",
+                        remediation="Set bucket ACL to private. Block public access at account level.",
+                        cvss=9.1,
+                        tags=["CLOUD", "DATA_EXPOSURE"],
+                        phase="INFRA",
+                    ))
+                elif bucket.get("status") == "exists-403":
+                    all_findings.append(Finding(
+                        cve="INFRA-BUCKET-EXISTS",
+                        severity="LOW",
+                        title=f"{bucket['service'].upper()} Bucket Exists (403): {bucket['url']}",
+                        url=bucket["url"],
+                        evidence="Bucket exists but access denied — verify no unintended data",
+                        remediation="Confirm bucket is intentional and has correct ACL policy.",
+                        cvss=2.0,
+                        tags=["CLOUD"],
+                        phase="INFRA",
+                    ))
+            for secret in infra_result.github_secrets:
+                all_findings.append(Finding(
+                    cve="INFRA-GITHUB-SECRET",
+                    severity="CRITICAL",
+                    title=f"Secret in GitHub: {secret.get('secret_type','')} in {secret.get('repo','')}",
+                    url=secret.get("url", ""),
+                    evidence=f"File: {secret.get('file','')} | Pattern: {secret.get('pattern','')}",
+                    remediation="Rotate the credential immediately. Use GitHub secret scanning alerts.",
+                    cvss=9.8,
+                    tags=["SECRETS", "GITHUB"],
+                    phase="INFRA",
+                ))
+            # Interesting unprotected services
+            for host in infra_result.hosts:
+                for svc in host.http_services:
+                    for interesting in svc.get("interesting", []):
+                        sev_map = {
+                            "mongodb-noauth": ("CRITICAL", 9.8, "NOSQL"),
+                            "elasticsearch-noauth": ("CRITICAL", 9.8, "DATA_EXPOSURE"),
+                            "phpinfo": ("MEDIUM", 5.3, "INFO_DISCLOSURE"),
+                            "error-disclosure": ("LOW", 3.1, "INFO_DISCLOSURE"),
+                            "credentials-in-page": ("HIGH", 7.5, "SECRETS"),
+                        }
+                        sv, cs, tag = sev_map.get(interesting, ("MEDIUM", 4.0, "INFO"))
+                        all_findings.append(Finding(
+                            cve=f"INFRA-{interesting.upper().replace('-','_')}",
+                            severity=sv,
+                            title=f"Unprotected Service: {interesting} at {svc['url']}",
+                            url=svc["url"],
+                            evidence=f"Tech: {svc.get('tech',[])} | Port: {host.open_ports}",
+                            remediation="Apply authentication. Restrict access to internal networks.",
+                            cvss=cs,
+                            tags=[tag, "INFRA"],
+                            phase="INFRA",
+                        ))
+        except Exception as e:
+            print(f"{Y}[!]{RST} Infra phase error: {e}")
+            if args.verbose:
+                import traceback; traceback.print_exc()
+    elif args.infra and not _HAS_INFRA:
+        print(f"{Y}[!]{RST} infra.py not found in same directory as hunt.py")
+
+    # ── Phase 0b: Stealth / WAF detection ─────────────────────────────────────
     if _HAS_STEALTH and not args.cve_only:
-        print(f"\n{B}{BOLD}[Phase 0] WAF Detection & Stealth Prep{RST}")
+        print(f"\n{B}{BOLD}[Phase 0b] WAF Detection & Stealth Prep{RST}")
         try:
             waf_result = await detect_waf(base, args.verbose)
             if waf_result.detected:
@@ -1827,6 +1920,8 @@ async def main():
         print(f"  {G}Recon:  {RST} {os.path.join(outdir, 'recon.json')}")
     if os.path.exists(os.path.join(outdir, "gov.json")):
         print(f"  {G}Gov:    {RST} {os.path.join(outdir, 'gov.json')}")
+    if infra_result and os.path.exists(os.path.join(outdir, f"infra_{urllib.parse.urlparse(base).hostname}.json")):
+        print(f"  {G}Infra:  {RST} {os.path.join(outdir, 'infra_' + (urllib.parse.urlparse(base).hostname or 'target') + '.json')}")
     print(f"{'═'*60}\n")
 
     if any(f.severity in ("CRITICAL", "HIGH") for f in all_findings):
