@@ -2238,8 +2238,8 @@ def save_json(endpoints: List[Endpoint], path: str):
             "redirect_to": ep.redirect_to, "params": ep.params,
             "score": score(ep),
         })
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
     print(f"{G}JSON saved:{RST} {path}")
 
 

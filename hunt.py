@@ -1785,7 +1785,7 @@ async def main():
                 print(f"{G}[+]{RST} Stealth mode active — adaptive delays, UA rotation")
                 # Probe rate limit
                 rl = await detect_rate_limit(base, args.verbose)
-                if rl.get("rate_limited"):
+                if rl.get("rate_limit_detected"):
                     safe_delay = rl.get("safe_delay_ms", 500)
                     if safe_delay > args.delay:
                         print(f"{Y}[RL]{RST} Rate limit detected — auto-adjusting delay to {safe_delay}ms")
@@ -1892,7 +1892,7 @@ async def main():
         only_list = [t.strip() for t in args.tools_only.split(",")] if args.tools_only else None
         try:
             tool_results = run_all_tools(
-                target=base,
+                base_url=base,
                 outdir=outdir,
                 proxy=args.proxy,
                 cookies=args.cookies or "",
@@ -1924,7 +1924,7 @@ async def main():
         print(f"\n{M}{BOLD}[Phase 4b] Ghost Browser Scan (Real Chromium + CDP Stealth){RST}")
         try:
             ghost_result = await ghost_scan(
-                url=base,
+                target=base,
                 outdir=outdir,
                 login_url=getattr(args, "ghost_login", None),
                 username=getattr(args, "ghost_user", None),
@@ -1980,8 +1980,6 @@ async def main():
             intel_result = await run_intel(
                 target=base,
                 outdir=outdir,
-                findings=all_findings,
-                proxy=args.proxy,
                 verbose=args.verbose,
             )
             intel_findings = intel_result.get("priority_findings", [])
