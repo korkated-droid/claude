@@ -50,6 +50,8 @@ PIPELINE
   Phase 3: CVE modules  — 22 core CVE exploit probes
   Phase 3b: cve_extended — 28 more CVEs (Log4Shell, Spring4Shell, Confluence, MOVEit, …)
   Phase 4: External tools — nuclei, ffuf, sqlmap, dalfox, subfinder, httpx, katana, …
+  Phase 4b: ghost.py    — Real Chromium (CDP stealth), DOM XSS, JS analysis, CORS, CSP, screenshot
+  Phase 4c: intel.py    — Attack chains, Wayback endpoints, source maps, entropy secrets, dependency CVEs
   Phase 5: Report       — merged JSON + Markdown + severity summary
 
 CVE MODULES INCLUDED
@@ -159,6 +161,18 @@ try:
     _HAS_INFRA = True
 except ImportError:
     _HAS_INFRA = False
+
+try:
+    from ghost import ghost_scan, GhostFinding
+    _HAS_GHOST = True
+except ImportError:
+    _HAS_GHOST = False
+
+try:
+    from intel import run_intel, IntelFinding
+    _HAS_INTEL = True
+except ImportError:
+    _HAS_INTEL = False
 
 # ── ANSI ──────────────────────────────────────────────────────────────────────
 
@@ -1643,6 +1657,11 @@ async def main():
     parser.add_argument("--full-ports", action="store_true", help="Full 1-65535 port scan during infra phase")
     parser.add_argument("--asn-range", action="store_true", help="Reverse-DNS scan ASN CIDR ranges (slow)")
     parser.add_argument("--github-org", help="GitHub org to scan for secrets (e.g. --github-org robinhood)")
+    parser.add_argument("--ghost", action="store_true", help="Real Chromium browser scan (CDP stealth, DOM XSS, JS analysis, screenshot)")
+    parser.add_argument("--ghost-login", help="Login URL for ghost browser authenticated scan")
+    parser.add_argument("--ghost-user", help="Username/email for ghost login")
+    parser.add_argument("--ghost-pass", help="Password for ghost login")
+    parser.add_argument("--intel", action="store_true", help="Deep intelligence: attack chains, Wayback endpoints, source maps, entropy secrets")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -1885,6 +1904,85 @@ async def main():
     elif args.tools and not _HAS_TOOLS:
         print(f"{Y}[!]{RST} tools.py not found — install it in same directory as hunt.py")
 
+    # ── Phase 4b: Ghost browser scan ─────────────────────────────────────────
+    ghost_findings_raw: list = []
+    if args.ghost and _HAS_GHOST:
+        print(f"\n{M}{BOLD}[Phase 4b] Ghost Browser Scan (Real Chromium + CDP Stealth){RST}")
+        try:
+            ghost_result = await ghost_scan(
+                url=base,
+                outdir=outdir,
+                login_url=getattr(args, "ghost_login", None),
+                username=getattr(args, "ghost_user", None),
+                password=getattr(args, "ghost_pass", None),
+                proxy=args.proxy,
+                verbose=args.verbose,
+            )
+            ghost_findings_raw = ghost_result.get("findings", [])
+            for gf in ghost_findings_raw:
+                all_findings.append(Finding(
+                    cve=gf.get("type", "GHOST"),
+                    severity=gf.get("severity", "INFO"),
+                    title=gf.get("title", ""),
+                    url=gf.get("url", base),
+                    evidence=str(gf.get("evidence", ""))[:500],
+                    remediation=gf.get("remediation", ""),
+                    cvss=float(gf.get("cvss", 0.0)),
+                    tags=gf.get("tags", ["browser", "client-side"]),
+                    phase="GHOST",
+                ))
+            screenshot = os.path.join(outdir, "ghost_screenshot.png")
+            print(f"{G}[+]{RST} Ghost: {len(ghost_findings_raw)} findings", end="")
+            if os.path.exists(screenshot):
+                print(f" | screenshot → {screenshot}", end="")
+            print()
+        except Exception as e:
+            print(f"{Y}[!]{RST} Ghost scan error: {e}")
+            if args.verbose:
+                import traceback; traceback.print_exc()
+    elif args.ghost and not _HAS_GHOST:
+        print(f"{Y}[!]{RST} ghost.py not found — install playwright: pip install playwright && playwright install chromium")
+
+    # ── Phase 4c: Intel / Deep Analysis ──────────────────────────────────────
+    intel_result = None
+    if args.intel and _HAS_INTEL:
+        print(f"\n{C}{BOLD}[Phase 4c] Intel — Attack Chains, Wayback, Source Maps, Entropy Secrets{RST}")
+        try:
+            intel_result = await run_intel(
+                target=base,
+                outdir=outdir,
+                findings=all_findings,
+                proxy=args.proxy,
+                verbose=args.verbose,
+            )
+            intel_findings = intel_result.get("findings", [])
+            for inf in intel_findings:
+                all_findings.append(Finding(
+                    cve=inf.get("type", "INTEL"),
+                    severity=inf.get("severity", "INFO"),
+                    title=inf.get("title", ""),
+                    url=inf.get("url", base),
+                    evidence=str(inf.get("evidence", ""))[:500],
+                    remediation=inf.get("remediation", "Review and rotate immediately"),
+                    cvss=float(inf.get("cvss", 0.0)),
+                    tags=inf.get("tags", ["intel", "recon"]),
+                    phase="INTEL",
+                ))
+            chains_matched = intel_result.get("attack_chains_matched", [])
+            print(f"{G}[+]{RST} Intel: {len(intel_findings)} findings", end="")
+            if chains_matched:
+                print(f" | {len(chains_matched)} attack chain(s): {', '.join(c.get('name','?') for c in chains_matched[:3])}", end="")
+            print()
+            intel_md = os.path.join(outdir, "intel_report.md")
+            if os.path.exists(intel_md):
+                print(f"{G}[+]{RST} Intel report → {intel_md}")
+        except Exception as e:
+            print(f"{Y}[!]{RST} Intel error: {e}")
+            if args.verbose:
+                import traceback; traceback.print_exc()
+    elif args.intel and not _HAS_INTEL:
+        print(f"{Y}[!]{RST} intel.py not found — place it in same directory as hunt.py")
+
     # Merge gov findings into all_findings for unified report
     if gov_data:
         for gf in gov_data.get("findings", []):
@@ -1922,6 +2020,10 @@ async def main():
         print(f"  {G}Gov:    {RST} {os.path.join(outdir, 'gov.json')}")
     if infra_result and os.path.exists(os.path.join(outdir, f"infra_{urllib.parse.urlparse(base).hostname}.json")):
         print(f"  {G}Infra:  {RST} {os.path.join(outdir, 'infra_' + (urllib.parse.urlparse(base).hostname or 'target') + '.json')}")
+    if os.path.exists(os.path.join(outdir, "ghost_findings.json")):
+        print(f"  {G}Ghost:  {RST} {os.path.join(outdir, 'ghost_findings.json')}")
+    if os.path.exists(os.path.join(outdir, "intel_report.md")):
+        print(f"  {G}Intel:  {RST} {os.path.join(outdir, 'intel_report.md')}")
     print(f"{'═'*60}\n")
 
     if any(f.severity in ("CRITICAL", "HIGH") for f in all_findings):
