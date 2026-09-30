@@ -1,3 +1,37 @@
+# HUNT Security Toolkit — requirements.txt
+# Install: pip install -r requirements.txt
+# For ghost.py browser scanning also run: playwright install chromium
+
+# ── Core async HTTP ──────────────────────────────────────────────────────────
 aiohttp>=3.9.0
+aiofiles>=23.0.0
+
+# ── Browser automation (ghost.py) ───────────────────────────────────────────
+playwright>=1.44.0
+
+# ── HTML parsing ─────────────────────────────────────────────────────────────
 beautifulsoup4>=4.12.0
 lxml>=5.0.0
+
+# ── DNS / network ────────────────────────────────────────────────────────────
+dnspython>=2.6.0
+
+# ── Crypto / encoding ────────────────────────────────────────────────────────
+pycryptodome>=3.20.0
+PyJWT>=2.8.0
+
+# ── Favicon hashing (infra.py Shodan pivot) ──────────────────────────────────
+mmh3>=4.1.0
+
+# ── CLI / output ─────────────────────────────────────────────────────────────
+rich>=13.7.0
+colorama>=0.4.6
+
+# ── Data / utils ─────────────────────────────────────────────────────────────
+requests>=2.31.0
+urllib3>=2.2.0
+tldextract>=5.1.0
+python-dateutil>=2.9.0
+
+# ── Optional: faster JSON ────────────────────────────────────────────────────
+orjson>=3.9.0
