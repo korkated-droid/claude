@@ -34,14 +34,22 @@ OPTIONS
   --no-gov          Skip gov_level.py phase
   --cve-only        Run only CVE exploit modules
   --tech            Force tech hint (spring|laravel|django|rails|next|express)
+  --stealth         Enable stealth mode (UA rotation, adaptive delays, WAF bypass)
+  --waf WAF         Force WAF vendor (cloudflare|akamai|aws_waf|imperva|modsecurity|f5_asm)
+  --tools           Run external tools phase (nuclei, ffuf, sqlmap, dalfox, etc.)
+  --tools-only LIST Run only specified tools: --tools-only nuclei,ffuf,sqlmap
+  --no-extended     Skip cve_extended.py additional CVE modules
   -v, --verbose     Verbose output
 
 PIPELINE
 ────────
+  Phase 0: stealth      — WAF detection, real IP discovery, rate limit probe
   Phase 1: recon.py     — passive OSINT + endpoint discovery + email oracle
   Phase 2: gov_level.py — 25 advanced red-team checks
-  Phase 3: CVE modules  — real-time exploit probes for known CVEs / tech-specific bugs
-  Phase 4: Report       — merged JSON + Markdown + severity summary
+  Phase 3: CVE modules  — 22 core CVE exploit probes
+  Phase 3b: cve_extended — 28 more CVEs (Log4Shell, Spring4Shell, Confluence, MOVEit, …)
+  Phase 4: External tools — nuclei, ffuf, sqlmap, dalfox, subfinder, httpx, katana, …
+  Phase 5: Report       — merged JSON + Markdown + severity summary
 
 CVE MODULES INCLUDED
 ────────────────────
@@ -124,6 +132,26 @@ try:
 except ImportError:
     print("[!] Missing deps: pip install aiohttp beautifulsoup4 lxml")
     sys.exit(1)
+
+# Optional extended modules — gracefully absent if not in same directory
+try:
+    from cve_extended import CVE_EXTENDED_MODULES
+    _HAS_CVE_EXTENDED = True
+except ImportError:
+    CVE_EXTENDED_MODULES = []
+    _HAS_CVE_EXTENDED = False
+
+try:
+    from stealth import detect_waf, StealthSession, detect_rate_limit, find_real_ip
+    _HAS_STEALTH = True
+except ImportError:
+    _HAS_STEALTH = False
+
+try:
+    from tools import run_all_tools
+    _HAS_TOOLS = True
+except ImportError:
+    _HAS_TOOLS = False
 
 # ── ANSI ──────────────────────────────────────────────────────────────────────
 
@@ -1368,8 +1396,8 @@ async def run_cve_modules(
     delay: int,
     verbose: bool,
 ) -> List[Finding]:
-    print(f"\n{B}{BOLD}[Phase 3] CVE & Generic Exploit Modules{RST}")
-    print(f"  {DIM}Running {len(CVE_MODULES)+1} exploit checks against {base}{RST}\n")
+    print(f"\n{B}{BOLD}[Phase 3] CVE & Generic Exploit Modules ({len(CVE_MODULES)+1} checks){RST}")
+    print(f"  {DIM}Against {base}{RST}\n")
 
     findings = []
     session = build_session(token, cookies, proxy, delay)
@@ -1394,6 +1422,42 @@ async def run_cve_modules(
     # JWT needs token arg
     tasks.append(run_one("GENERIC-013 JWT attacks", lambda s, b, v: run_jwt_module(s, b, token, v)))
 
+    results = await asyncio.gather(*tasks)
+    for r in results:
+        findings.extend(r)
+    await session.close()
+    return findings
+
+
+async def run_extended_cve_modules(
+    base: str,
+    token: Optional[str],
+    proxy: Optional[str],
+    cookies: Optional[str],
+    concurrency: int,
+    delay: int,
+    verbose: bool,
+) -> List[Finding]:
+    findings = []
+    session = build_session(token, cookies, proxy, delay)
+    sem = asyncio.Semaphore(concurrency)
+
+    async def run_one(name, fn):
+        async with sem:
+            print(f"  {DIM}» {name}{RST}")
+            try:
+                if delay:
+                    await asyncio.sleep(delay / 1000)
+                result = await fn(session, base, verbose)
+                for f in result:
+                    print(f"    {sev(f.severity)} [{f.cve}] {f.title}")
+                return result
+            except Exception as e:
+                if verbose:
+                    print(f"    {DIM}Error in {name}: {e}{RST}")
+                return []
+
+    tasks = [run_one(name, fn) for name, fn in CVE_EXTENDED_MODULES]
     results = await asyncio.gather(*tasks)
     for r in results:
         findings.extend(r)
@@ -1563,6 +1627,11 @@ async def main():
     parser.add_argument("--no-gov", action="store_true", help="Skip gov_level.py phase")
     parser.add_argument("--cve-only", action="store_true", help="CVE modules only")
     parser.add_argument("--tech", help="Tech hint: spring|laravel|django|rails|next|express")
+    parser.add_argument("--stealth", action="store_true", help="Enable stealth mode (UA rotation, WAF bypass headers)")
+    parser.add_argument("--waf", help="Force WAF: cloudflare|akamai|aws_waf|imperva|modsecurity|f5_asm")
+    parser.add_argument("--tools", action="store_true", help="Run external tools (nuclei, ffuf, sqlmap, dalfox, etc.)")
+    parser.add_argument("--tools-only", help="Comma-separated tool list: nuclei,ffuf,sqlmap")
+    parser.add_argument("--no-extended", action="store_true", help="Skip cve_extended.py modules")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -1578,8 +1647,46 @@ async def main():
     recon_data = None
     gov_data = None
     all_findings: List[Finding] = []
+    waf_result = None
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # ── Phase 0: Stealth / WAF detection ─────────────────────────────────────
+    if _HAS_STEALTH and not args.cve_only:
+        print(f"\n{B}{BOLD}[Phase 0] WAF Detection & Stealth Prep{RST}")
+        try:
+            waf_result = await detect_waf(base, args.verbose)
+            if waf_result.detected:
+                print(f"{Y}[WAF]{RST} Detected: {BOLD}{waf_result.waf_name}{RST} (confidence {waf_result.confidence:.0%})")
+                for ev in waf_result.evidence[:3]:
+                    print(f"       {DIM}{ev}{RST}")
+                if waf_result.bypass_techniques:
+                    print(f"{G}[WAF]{RST} Bypass techniques: {', '.join(waf_result.bypass_techniques[:5])}")
+            else:
+                print(f"{G}[WAF]{RST} No WAF detected or unrecognized")
+
+            if args.stealth or (waf_result and waf_result.detected):
+                print(f"{G}[+]{RST} Stealth mode active — adaptive delays, UA rotation")
+                # Probe rate limit
+                rl = await detect_rate_limit(base, args.verbose)
+                if rl.get("rate_limited"):
+                    safe_delay = rl.get("safe_delay_ms", 500)
+                    if safe_delay > args.delay:
+                        print(f"{Y}[RL]{RST} Rate limit detected — auto-adjusting delay to {safe_delay}ms")
+                        args.delay = safe_delay
+
+            # Real IP discovery
+            real_ips = await find_real_ip(urllib.parse.urlparse(base).hostname or base, args.verbose)
+            if real_ips:
+                print(f"{G}[+]{RST} Potential real IPs found:")
+                for r_ip in real_ips[:5]:
+                    print(f"       {DIM}via {r_ip.get('method','?')}: {r_ip.get('ip','?')}{RST}")
+
+        except Exception as e:
+            if args.verbose:
+                print(f"{Y}[!]{RST} Phase 0 error: {e}")
+    elif args.waf:
+        print(f"{Y}[WAF]{RST} Forced WAF vendor: {args.waf}")
 
     # ── Phase 1: recon.py ────────────────────────────────────────────────────
     if not args.no_recon and not args.cve_only:
@@ -1636,6 +1743,55 @@ async def main():
     )
     all_findings.extend(cve_findings)
 
+    # ── Phase 3b: Extended CVE modules ──────────────────────────────────────
+    if _HAS_CVE_EXTENDED and not args.no_extended:
+        print(f"\n{B}{BOLD}[Phase 3b] Extended CVE Modules ({len(CVE_EXTENDED_MODULES)} checks){RST}")
+        ext_findings = await run_extended_cve_modules(
+            base=base,
+            token=args.token,
+            proxy=args.proxy,
+            cookies=args.cookies,
+            concurrency=args.concurrency,
+            delay=args.delay,
+            verbose=args.verbose,
+        )
+        all_findings.extend(ext_findings)
+        print(f"{G}[+]{RST} Extended CVE: {len(ext_findings)} findings")
+    elif not _HAS_CVE_EXTENDED:
+        print(f"{DIM}[i] cve_extended.py not found — skipping extended CVE modules{RST}")
+
+    # ── Phase 4: External tools ──────────────────────────────────────────────
+    if (args.tools or args.tools_only) and _HAS_TOOLS:
+        print(f"\n{B}{BOLD}[Phase 4] External Tools{RST}")
+        only_list = [t.strip() for t in args.tools_only.split(",")] if args.tools_only else None
+        try:
+            tool_results = run_all_tools(
+                target=base,
+                outdir=outdir,
+                proxy=args.proxy,
+                cookies=args.cookies or "",
+                token=args.token or "",
+                passive_only=False,
+                aggressive=not args.stealth,
+                only=only_list,
+                verbose=args.verbose,
+            )
+            tools_json_path = os.path.join(outdir, "tools.json")
+            with open(tools_json_path, "w") as f:
+                json.dump(
+                    [{"tool": r.tool, "success": r.success, "findings": r.findings_count,
+                      "output": r.output_file, "elapsed": r.elapsed, "error": r.error}
+                     for r in tool_results],
+                    f, indent=2,
+                )
+            successful = sum(1 for r in tool_results if r.success)
+            total_ext = sum(r.findings_count for r in tool_results)
+            print(f"{G}[+]{RST} Tools: {successful}/{len(tool_results)} ran, {total_ext} aggregate findings → {tools_json_path}")
+        except Exception as e:
+            print(f"{Y}[!]{RST} External tools error: {e}")
+    elif args.tools and not _HAS_TOOLS:
+        print(f"{Y}[!]{RST} tools.py not found — install it in same directory as hunt.py")
+
     # Merge gov findings into all_findings for unified report
     if gov_data:
         for gf in gov_data.get("findings", []):
@@ -1651,8 +1807,8 @@ async def main():
                 phase="GOV",
             ))
 
-    # ── Phase 4: Report ──────────────────────────────────────────────────────
-    print(f"\n{B}{BOLD}[Phase 4] Generating Report{RST}")
+    # ── Phase 5: Report ──────────────────────────────────────────────────────
+    print(f"\n{B}{BOLD}[Phase 5] Generating Report{RST}")
     md_path = generate_report(all_findings, recon_data, gov_data, base, outdir)
 
     # Summary
@@ -1663,8 +1819,14 @@ async def main():
     for s, c in counts.items():
         if c > 0:
             print(f"  {SEV_COLOR[s]}{s:10}{RST}  {BOLD}{c}{RST}")
-    print(f"\n  {G}Report:{RST} {md_path}")
-    print(f"  {G}JSON:  {RST} {os.path.join(outdir, 'findings.json')}")
+    print(f"\n  {G}Report:{RST}  {md_path}")
+    print(f"  {G}JSON:   {RST} {os.path.join(outdir, 'findings.json')}")
+    if os.path.exists(os.path.join(outdir, "tools.json")):
+        print(f"  {G}Tools:  {RST} {os.path.join(outdir, 'tools.json')}")
+    if os.path.exists(os.path.join(outdir, "recon.json")):
+        print(f"  {G}Recon:  {RST} {os.path.join(outdir, 'recon.json')}")
+    if os.path.exists(os.path.join(outdir, "gov.json")):
+        print(f"  {G}Gov:    {RST} {os.path.join(outdir, 'gov.json')}")
     print(f"{'═'*60}\n")
 
     if any(f.severity in ("CRITICAL", "HIGH") for f in all_findings):
