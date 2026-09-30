@@ -1822,7 +1822,12 @@ async def main():
             recon_cmd += ["--tech", args.tech]
         if args.verbose:
             recon_cmd.append("-v")
-        recon_data = run_subprocess(recon_cmd, "Phase 1: recon.py", recon_out, args.verbose)
+        recon_data_raw = run_subprocess(recon_cmd, "Phase 1: recon.py", recon_out, args.verbose)
+        # recon.json may be a list of endpoints or a dict — normalise to dict
+        if isinstance(recon_data_raw, list):
+            recon_data = {"endpoints": recon_data_raw, "subdomains": []}
+        else:
+            recon_data = recon_data_raw
         if recon_data:
             ep_count = len(recon_data.get("endpoints", []))
             print(f"\n{G}[+]{RST} Recon complete: {ep_count} endpoints, {len(recon_data.get('subdomains',[]))} subdomains")
