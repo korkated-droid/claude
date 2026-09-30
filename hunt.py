@@ -1504,7 +1504,7 @@ def run_subprocess(cmd: List[str], label: str, outfile: str, verbose: bool) -> O
         if result.returncode != 0 and verbose:
             print(f"  {Y}[warn]{RST} {label} exited {result.returncode}: {result.stderr[:500]}")
         if os.path.exists(outfile):
-            with open(outfile) as f:
+            with open(outfile, encoding="utf-8") as f:
                 return json.load(f)
     except subprocess.TimeoutExpired:
         print(f"  {Y}[timeout]{RST} {label} exceeded 10 minutes")
@@ -1603,7 +1603,7 @@ def generate_report(
 
     md = "\n".join(lines)
     md_path = os.path.join(outdir, "report.md")
-    with open(md_path, "w") as f:
+    with open(md_path, "w", encoding="utf-8") as f:
         f.write(md)
 
     # JSON output
@@ -1624,8 +1624,8 @@ def generate_report(
         "recon_subdomains": len(recon_data.get("subdomains", [])) if recon_data else 0,
     }
     json_path = os.path.join(outdir, "findings.json")
-    with open(json_path, "w") as f:
-        json.dump(json_out, f, indent=2)
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(json_out, f, indent=2, ensure_ascii=False)
 
     return md_path
 
@@ -1889,7 +1889,7 @@ async def main():
                 verbose=args.verbose,
             )
             tools_json_path = os.path.join(outdir, "tools.json")
-            with open(tools_json_path, "w") as f:
+            with open(tools_json_path, "w", encoding="utf-8") as f:
                 json.dump(
                     [{"tool": r.tool, "success": r.success, "findings": r.findings_count,
                       "output": r.output_file, "elapsed": r.elapsed, "error": r.error}
@@ -2032,4 +2032,7 @@ async def main():
 
 
 if __name__ == "__main__":
+    import sys
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(main())

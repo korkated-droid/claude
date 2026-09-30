@@ -1840,13 +1840,13 @@ async def run_gov_level(base: str, token: str = "", verbose: bool = False,
         print()
 
     if output:
-        with open(output, "w") as fh:
+        with open(output, "w", encoding="utf-8") as fh:
             json.dump([{
                 "check": f.check, "severity": f.severity,
                 "title": f.title, "url": f.url,
                 "evidence": f.evidence, "remediation": f.remediation,
                 "cve": f.cve, "cvss": f.cvss, "tags": f.tags,
-            } for f in findings], fh, indent=2)
+            } for f in findings], fh, indent=2, ensure_ascii=False)
         print(f"{G}JSON saved: {output}{RST}")
 
     return findings
@@ -1867,6 +1867,9 @@ def main():
     if not base.startswith("http"):
         base = "https://" + base
 
+    import sys
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(run_gov_level(base, token=args.token, verbose=args.verbose,
                                proxy=args.proxy, concurrency=args.concurrency,
                                output=args.output))

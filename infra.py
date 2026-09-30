@@ -1053,7 +1053,7 @@ async def enumerate_infrastructure(
 
     # Save JSON
     out_path = os.path.join(outdir, f"infra_{domain}.json")
-    with open(out_path, "w") as f:
+    with open(out_path, "w", encoding="utf-8") as f:
         json.dump({
             "target": target,
             "domain": domain,
@@ -1098,6 +1098,9 @@ if __name__ == "__main__":
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
+    import sys
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(enumerate_infrastructure(
         target=args.target,
         outdir=args.output,

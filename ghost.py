@@ -939,7 +939,7 @@ async def ghost_scan(
 
     # ── Save results ───────────────────────────────────────────────────────
     results_path = os.path.join(outdir, "ghost_findings.json")
-    with open(results_path, "w") as f:
+    with open(results_path, "w", encoding="utf-8") as f:
         json.dump([{
             "title": g.title, "severity": g.severity, "url": g.url,
             "evidence": g.evidence[:500], "remediation": g.remediation,
@@ -949,7 +949,7 @@ async def ghost_scan(
 
     # ── Save all intercepted calls ─────────────────────────────────────────
     calls_path = os.path.join(outdir, "ghost_api_calls.json")
-    with open(calls_path, "w") as f:
+    with open(calls_path, "w", encoding="utf-8") as f:
         json.dump([{
             "url": c.url, "method": c.method, "status": c.response_status,
             "req_body": c.request_body[:200], "resp_snippet": c.response_body[:300],
@@ -983,6 +983,9 @@ if __name__ == "__main__":
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
+    import sys
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     os.makedirs(args.output, exist_ok=True)
     findings = asyncio.run(ghost_scan(
         target=args.target,

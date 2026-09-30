@@ -743,7 +743,7 @@ async def fetch_source_map(js_url: str, map_ref: str, session: aiohttp.ClientSes
         fpath = os.path.join(out_path, safe)
         os.makedirs(os.path.dirname(fpath), exist_ok=True)
         try:
-            with open(fpath, "w") as f:
+            with open(fpath, "w", encoding="utf-8") as f:
                 f.write(content or "")
         except Exception:
             pass
@@ -1003,8 +1003,8 @@ async def run_intel(
 
     # Save intel report
     out_path = os.path.join(outdir, "intel.json")
-    with open(out_path, "w") as f:
-        json.dump(intel, f, indent=2, default=str)
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(intel, f, indent=2, default=str, ensure_ascii=False)
 
     # Save markdown priority report
     md_lines = [
@@ -1038,7 +1038,7 @@ async def run_intel(
             md_lines.append(f"- **{s['type']}** `{s['value'][:50]}` in `{s['source']}`")
 
     md_path = os.path.join(outdir, "intel_report.md")
-    with open(md_path, "w") as f:
+    with open(md_path, "w", encoding="utf-8") as f:
         f.write("\n".join(md_lines))
 
     print(f"\n{G}[+]{RST} Intel report → {out_path}")
@@ -1063,6 +1063,9 @@ if __name__ == "__main__":
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
 
+    import sys
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(run_intel(
         target=args.target,
         outdir=args.output,
