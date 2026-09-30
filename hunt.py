@@ -1771,7 +1771,7 @@ async def main():
     if _HAS_STEALTH and not args.cve_only:
         print(f"\n{B}{BOLD}[Phase 0b] WAF Detection & Stealth Prep{RST}")
         try:
-            waf_result = await detect_waf(base, args.verbose)
+            waf_result = await asyncio.wait_for(detect_waf(base, args.verbose), timeout=15.0)
             if waf_result.detected:
                 print(f"{Y}[WAF]{RST} Detected: {BOLD}{waf_result.waf_name}{RST} (confidence {waf_result.confidence:.0%})")
                 for ev in waf_result.evidence[:3]:
@@ -1784,7 +1784,7 @@ async def main():
             if args.stealth or (waf_result and waf_result.detected):
                 print(f"{G}[+]{RST} Stealth mode active — adaptive delays, UA rotation")
                 # Probe rate limit
-                rl = await detect_rate_limit(base, args.verbose)
+                rl = await asyncio.wait_for(detect_rate_limit(base, args.verbose), timeout=15.0)
                 if rl.get("rate_limit_detected"):
                     safe_delay = rl.get("safe_delay_ms", 500)
                     if safe_delay > args.delay:
@@ -1792,12 +1792,17 @@ async def main():
                         args.delay = safe_delay
 
             # Real IP discovery
-            real_ips = await find_real_ip(urllib.parse.urlparse(base).hostname or base, args.verbose)
+            real_ips = await asyncio.wait_for(
+                find_real_ip(urllib.parse.urlparse(base).hostname or base, args.verbose),
+                timeout=15.0
+            )
             if real_ips:
                 print(f"{G}[+]{RST} Potential real IPs found:")
                 for r_ip in real_ips[:5]:
                     print(f"       {DIM}via {r_ip.get('method','?')}: {r_ip.get('ip','?')}{RST}")
 
+        except asyncio.TimeoutError:
+            print(f"{Y}[!]{RST} Phase 0b timed out (VPN/slow DNS) — skipping WAF/IP detection")
         except Exception as e:
             if args.verbose:
                 print(f"{Y}[!]{RST} Phase 0 error: {e}")
