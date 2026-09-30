@@ -1847,7 +1847,12 @@ async def main():
             gov_cmd += ["--proxy", args.proxy]
         if args.verbose:
             gov_cmd.append("-v")
-        gov_data = run_subprocess(gov_cmd, "Phase 2: gov_level.py", gov_out, args.verbose)
+        gov_data_raw = run_subprocess(gov_cmd, "Phase 2: gov_level.py", gov_out, args.verbose)
+        # gov_level.py writes a list of findings directly
+        if isinstance(gov_data_raw, list):
+            gov_data = {"findings": gov_data_raw}
+        else:
+            gov_data = gov_data_raw
         if gov_data:
             gov_count = len(gov_data.get("findings", []))
             print(f"\n{G}[+]{RST} Gov-level complete: {gov_count} findings")
@@ -1927,19 +1932,34 @@ async def main():
                 proxy=args.proxy,
                 verbose=args.verbose,
             )
-            ghost_findings_raw = ghost_result.get("findings", [])
+            # ghost_scan returns a list of GhostFinding objects directly
+            ghost_findings_raw = ghost_result if isinstance(ghost_result, list) else ghost_result.get("findings", [])
             for gf in ghost_findings_raw:
-                all_findings.append(Finding(
-                    cve=gf.get("type", "GHOST"),
-                    severity=gf.get("severity", "INFO"),
-                    title=gf.get("title", ""),
-                    url=gf.get("url", base),
-                    evidence=str(gf.get("evidence", ""))[:500],
-                    remediation=gf.get("remediation", ""),
-                    cvss=float(gf.get("cvss", 0.0)),
-                    tags=gf.get("tags", ["browser", "client-side"]),
-                    phase="GHOST",
-                ))
+                # GhostFinding is a dataclass — use attribute access, not .get()
+                if isinstance(gf, dict):
+                    all_findings.append(Finding(
+                        cve=gf.get("type", "GHOST"),
+                        severity=gf.get("severity", "INFO"),
+                        title=gf.get("title", ""),
+                        url=gf.get("url", base),
+                        evidence=str(gf.get("evidence", ""))[:500],
+                        remediation=gf.get("remediation", ""),
+                        cvss=float(gf.get("cvss", 0.0)),
+                        tags=gf.get("tags", ["browser", "client-side"]),
+                        phase="GHOST",
+                    ))
+                else:
+                    all_findings.append(Finding(
+                        cve="GHOST",
+                        severity=getattr(gf, "severity", "INFO"),
+                        title=getattr(gf, "title", ""),
+                        url=getattr(gf, "url", base),
+                        evidence=str(getattr(gf, "evidence", ""))[:500],
+                        remediation=getattr(gf, "remediation", ""),
+                        cvss=float(getattr(gf, "cvss", 0.0)),
+                        tags=getattr(gf, "tags", ["browser", "client-side"]),
+                        phase="GHOST",
+                    ))
             screenshot = os.path.join(outdir, "ghost_screenshot.png")
             print(f"{G}[+]{RST} Ghost: {len(ghost_findings_raw)} findings", end="")
             if os.path.exists(screenshot):
@@ -1964,10 +1984,10 @@ async def main():
                 proxy=args.proxy,
                 verbose=args.verbose,
             )
-            intel_findings = intel_result.get("findings", [])
+            intel_findings = intel_result.get("priority_findings", [])
             for inf in intel_findings:
                 all_findings.append(Finding(
-                    cve=inf.get("type", "INTEL"),
+                    cve=inf.get("category", "INTEL"),
                     severity=inf.get("severity", "INFO"),
                     title=inf.get("title", ""),
                     url=inf.get("url", base),
@@ -1977,7 +1997,7 @@ async def main():
                     tags=inf.get("tags", ["intel", "recon"]),
                     phase="INTEL",
                 ))
-            chains_matched = intel_result.get("attack_chains_matched", [])
+            chains_matched = intel_result.get("attack_chains", [])
             print(f"{G}[+]{RST} Intel: {len(intel_findings)} findings", end="")
             if chains_matched:
                 print(f" | {len(chains_matched)} attack chain(s): {', '.join(c.get('name','?') for c in chains_matched[:3])}", end="")
