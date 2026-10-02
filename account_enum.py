@@ -122,6 +122,7 @@ import difflib
 import textwrap
 import html as html_module
 import importlib.util
+import threading
 from dataclasses import dataclass, field
 from typing import Optional, Any
 from enum import Enum
@@ -2695,18 +2696,33 @@ class AccountEnumerator:
                 all_paths.append((path, vector))
 
         targets = [self.target] + self.subdomains
+        total_probes = len(all_paths) * len(targets)
+        print(f"  Probing {len(all_paths)} paths across {len(targets)} target(s) = {total_probes} probes")
         found: list[EndpointInfo] = []
+        completed = [0]
+        lock = threading.Lock()
 
-        with ThreadPoolExecutor(max_workers=min(self.threads, 20)) as pool:
+        def _probe_with_progress(url, vector):
+            result = self._probe_endpoint_fast(url, vector)
+            with lock:
+                completed[0] += 1
+                if completed[0] % 50 == 0 or completed[0] == total_probes:
+                    pct = int(completed[0] / total_probes * 100)
+                    print(f"  [{pct}%] {completed[0]}/{total_probes} probed — {len(found)} alive", end="\r", flush=True)
+            return result
+
+        discovery_workers = min(max(self.threads * 2, 30), 40)
+        with ThreadPoolExecutor(max_workers=discovery_workers) as pool:
             futures = {}
             for base in targets:
                 for path, vector in all_paths:
                     url = f"{base}{path}"
-                    futures[pool.submit(self._probe_endpoint, url, vector)] = (path, vector)
+                    futures[pool.submit(_probe_with_progress, url, vector)] = (path, vector)
             for future in as_completed(futures):
                 result = future.result()
                 if result:
                     found.append(result)
+        print()
 
         if HAS_BS4:
             crawled = self._crawl_forms()
@@ -2719,10 +2735,12 @@ class AccountEnumerator:
             hist_eps = self.osint_recon.get_historical_endpoints()
             if hist_eps:
                 print(f"  {Fore.GREEN}[OSINT] Feeding {len(hist_eps)} historical endpoints into discovery{Style.RESET_ALL}")
-                for hep in hist_eps:
-                    probed = self._probe_endpoint(hep.url, hep.vector)
-                    if probed:
-                        found.append(probed)
+                with ThreadPoolExecutor(max_workers=discovery_workers) as pool:
+                    osint_futures = {pool.submit(self._probe_endpoint_fast, hep.url, hep.vector): hep for hep in hist_eps}
+                    for future in as_completed(osint_futures):
+                        probed = future.result()
+                        if probed:
+                            found.append(probed)
 
         seen = set()
         for ep in found:
@@ -2751,6 +2769,64 @@ class AccountEnumerator:
             print(f"    {ep.method} {ep.url} [{ep.vector.value}]{flag_str}")
 
         self._score_endpoints()
+
+    def _probe_endpoint_fast(self, url: str, vector: Vector) -> Optional[EndpointInfo]:
+        DEAD_CODES = {404, 410, 502, 503, 504}
+        REDIRECT_CODES = {301, 302, 303, 307, 308}
+
+        discovery_timeout = min(self.timeout, 5)
+
+        head_resp = self._request("HEAD", url, retries=0, timeout=discovery_timeout)
+        if head_resp is None:
+            get_resp = self._request("GET", url, retries=0, timeout=discovery_timeout)
+            if get_resp is None:
+                return None
+            if get_resp.status_code in DEAD_CODES:
+                return None
+            if self._is_soft_404(get_resp.text.lower() if get_resp.text else "", get_resp):
+                return None
+        elif head_resp.status_code in DEAD_CODES:
+            return None
+
+        fast_probes = [
+            ("POST", {"json": {"email": "probe@test.invalid"}, "timeout": discovery_timeout}),
+            ("POST", {"data": "email=probe%40test.invalid", "timeout": discovery_timeout}),
+            ("GET", {"timeout": discovery_timeout}),
+        ]
+
+        for method, extra_kwargs in fast_probes:
+            kw = dict(extra_kwargs)
+            if method == "POST" and "data" in kw:
+                kw.setdefault("headers", self._headers())
+                kw["headers"]["Content-Type"] = "application/x-www-form-urlencoded"
+
+            resp = self._request(method, url, retries=0, **kw)
+            if resp is None:
+                continue
+
+            if resp.status_code in REDIRECT_CODES:
+                loc = resp.headers.get("Location", "")
+                if loc:
+                    resolved = loc if loc.startswith("http") else urllib.parse.urljoin(url, loc)
+                    rr = self._request("GET", resolved, retries=0, timeout=discovery_timeout)
+                    if rr and rr.status_code not in DEAD_CODES:
+                        ep = self._build_endpoint_info(resolved, method, vector, rr)
+                        if ep:
+                            return ep
+                continue
+
+            if resp.status_code in DEAD_CODES:
+                continue
+
+            if resp.status_code < 500:
+                body = resp.text.lower() if resp.text else ""
+                if self._is_soft_404(body, resp):
+                    continue
+                ep = self._build_endpoint_info(url, method, vector, resp)
+                if ep:
+                    return ep
+
+        return None
 
     def _probe_endpoint(self, url: str, vector: Vector) -> Optional[EndpointInfo]:
         DEAD_CODES = {404, 410, 502, 503, 504}
